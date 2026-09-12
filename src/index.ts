@@ -2,6 +2,13 @@ import { Vector3Utils } from "@minecraft/math";
 import {
   Block,
   Dimension,
+  EnchantmentType,
+  EntityEquippableComponent,
+  EquipmentSlot,
+  GameMode,
+  ItemComponentTypes,
+  ItemDurabilityComponent,
+  ItemStack,
   Player,
   PlayerBreakBlockAfterEvent,
   ScriptEventCommandMessageAfterEvent,
@@ -13,10 +20,8 @@ import {
 // 設定オブジェクト
 const config = {
   maxLog: 150, // 原木の破壊上限
-  maxLeaves: 600, // 葉っぱの破壊上限
-  lowBorderLog: 7,
-  highLeafRadius: 3, // 葉っぱの破壊半径
-  lowLeafRadius: 2,
+  maxLeaves: 1000, // 葉っぱの破壊上限
+  leafRadius: 4, // 葉っぱの破壊半径
 };
 
 const LOG_TO_LEAVES = {
@@ -33,12 +38,55 @@ const LOG_TO_LEAVES = {
   "minecraft:warped_stem": "minecraft:warped_wart_block",
 };
 
+/**
+ * マインクラフト統合版 つるはしで採掘可能な鉱石ブロックID一覧
+ */
+export const ORE_BLOCK_IDS: ReadonlySet<string> = new Set([
+  // --- オーバーワールド（石系） ---
+  "minecraft:coal_ore",
+  "minecraft:copper_ore",
+  "minecraft:iron_ore",
+  "minecraft:lapis_ore",
+  "minecraft:gold_ore",
+  "minecraft:redstone_ore",
+  "minecraft:lit_redstone_ore", // 点灯状態
+  "minecraft:diamond_ore",
+  "minecraft:emerald_ore",
+
+  // --- オーバーワールド（深層岩系） ---
+  "minecraft:deepslate_coal_ore",
+  "minecraft:deepslate_copper_ore",
+  "minecraft:deepslate_iron_ore",
+  "minecraft:deepslate_lapis_ore",
+  "minecraft:deepslate_gold_ore",
+  "minecraft:deepslate_redstone_ore",
+  "minecraft:lit_deepslate_redstone_ore", // 点灯状態
+  "minecraft:deepslate_diamond_ore",
+  "minecraft:deepslate_emerald_ore",
+
+  // --- ネザー ---
+  "minecraft:nether_gold_ore",
+  "minecraft:quartz_ore",
+  "minecraft:gilded_blackstone",
+  "minecraft:ancient_debris",
+
+  // --- 関連ブロック（生鉱石・アメジスト） ---
+  "minecraft:amethyst_cluster",
+  "minecraft:raw_iron_block",
+  "minecraft:raw_copper_block",
+  "minecraft:raw_gold_block",
+]);
+
 interface Zone {
   min: Vector3;
   max: Vector3;
 }
 
-function updateZone(zone: Zone | null, position: Vector3, radius: number) {
+function expandZone(
+  zone: Zone | null,
+  position: Vector3,
+  radius: number,
+): Zone {
   if (!zone) {
     return {
       min: {
@@ -80,11 +128,11 @@ function isInZone(zone: Zone, position: Vector3, isInfY: boolean) {
 }
 
 function getAroundPositions(position: Vector3) {
-  const result = [];
+  const result: Vector3[] = [];
   const shift = [-1, 0, 1];
-  for (let x of shift) {
-    for (let y of shift) {
-      for (let z of shift) {
+  for (const x of shift) {
+    for (const y of shift) {
+      for (const z of shift) {
         if (x === 0 && y === 0 && z === 0) continue;
         result.push(Vector3Utils.add(position, { x, y, z }));
       }
@@ -93,119 +141,311 @@ function getAroundPositions(position: Vector3) {
   return result;
 }
 
-function vector3Tostring(vector: Vector3) {
+function vector3ToString(vector: Vector3) {
   return `${vector.x}_${vector.y}_${vector.z}`;
 }
 
+/**
+ * 連結しているブロック座標を探索して取得する
+ * @param dimension 対象ディメンション
+ * @param startPositions 探索開始座標の配列
+ * @param predicate 破壊・連結対象とするか判定するコールバック（trueなら対象として採用し周囲も探索）
+ * @param options 上限数や探索済みSet
+ */
 function getConnectedPositions(
   dimension: Dimension,
-  blockTypeId: string,
-  startPosList: Vector3[],
+  startPositions: Vector3[],
+  predicate: (block: Block) => boolean,
   options?: {
     maxCount?: number;
-    alreadySearchedPosSet?: Set<string>;
-    zone?: Zone;
-    onVerifyBlock?: (block: Block) => void;
+    searchedSet?: Set<string>;
   },
 ) {
-  const startFloorList = startPosList.map((pos) => Vector3Utils.floor(pos));
-  const nextSearchTargetPosList: Vector3[] = startFloorList;
-  const searchedPosSet = options?.alreadySearchedPosSet ?? new Set<string>();
-  startFloorList.forEach((pos) => searchedPosSet.add(vector3Tostring(pos)));
+  const maxCount = options?.maxCount ?? 1000;
+  const searchedSet = options?.searchedSet ?? new Set<string>();
 
-  const findPosList = [];
+  const nextQueue: Vector3[] = startPositions.map((pos) =>
+    Vector3Utils.floor(pos),
+  );
+  nextQueue.forEach((pos) => searchedSet.add(vector3ToString(pos)));
 
-  while (
-    nextSearchTargetPosList.length > 0 &&
-    findPosList.length < (options?.maxCount ?? 1000)
-  ) {
-    const searchTargetPosList = [...nextSearchTargetPosList];
-    nextSearchTargetPosList.length = 0;
+  const matchedPositions: Vector3[] = [];
 
-    for (let targetPos of searchTargetPosList) {
-      const targetBlock = dimension.getBlock(targetPos);
-      if (!targetBlock) continue;
-      options?.onVerifyBlock?.(targetBlock);
-      const inZone = options?.zone
-        ? isInZone(options.zone, targetPos, true)
-        : true;
-      if (targetBlock?.typeId === blockTypeId && inZone) {
-        findPosList.push(targetPos);
-        if (findPosList.length >= (options?.maxCount ?? 1000)) break;
-        getAroundPositions(targetPos).forEach((pos) => {
-          if (!searchedPosSet.has(vector3Tostring(pos))) {
-            searchedPosSet.add(vector3Tostring(pos));
-            nextSearchTargetPosList.push(pos);
+  while (nextQueue.length > 0 && matchedPositions.length < maxCount) {
+    const currentTargets = [...nextQueue];
+    nextQueue.length = 0;
+
+    for (const targetPos of currentTargets) {
+      const block = dimension.getBlock(targetPos);
+      if (!block) continue;
+
+      // 判定処理を外部コールバックに委任
+      if (predicate(block)) {
+        matchedPositions.push(targetPos);
+        if (matchedPositions.length >= maxCount) break;
+
+        for (const aroundPos of getAroundPositions(targetPos)) {
+          const key = vector3ToString(aroundPos);
+          if (!searchedSet.has(key)) {
+            searchedSet.add(key);
+            nextQueue.push(aroundPos);
           }
-        });
+        }
       }
     }
   }
 
   return {
-    connectedPositions: [...startFloorList, ...findPosList],
-    newConnectedPositions: findPosList,
-    searchedPosSet: searchedPosSet,
+    connectedPositions: matchedPositions,
+    searchedSet: searchedSet,
   };
 }
 
-function treeMassDestruction(event: PlayerBreakBlockAfterEvent) {
-  const player = event.player;
-  const blockId = event.brokenBlockPermutation.type.id;
-  let lowZone: Zone | null = null;
-  let highZone: Zone | null = null;
+function getMainHandItemInfo(player: Player) {
+  const equippable = player.getComponent("minecraft:equippable") as
+    | EntityEquippableComponent
+    | undefined;
+  if (!equippable) return null;
 
-  if (!(blockId in LOG_TO_LEAVES)) return;
-  const leafId = LOG_TO_LEAVES[blockId as keyof typeof LOG_TO_LEAVES];
+  const mainhandItem = equippable.getEquipment(EquipmentSlot.Mainhand);
+  if (!mainhandItem) return null;
 
-  const aroundLeafList: Vector3[] = [];
-  const { connectedPositions: treeDestroyPositions, searchedPosSet } =
-    getConnectedPositions(
-      player.dimension,
-      blockId,
-      getAroundPositions(event.block.location),
-      {
-        maxCount: config.maxLog,
-        onVerifyBlock: (block) => {
-          if (block.typeId === leafId) aroundLeafList.push(block.location);
-          if (block.typeId === blockId) {
-            lowZone = updateZone(lowZone, block.location, config.lowLeafRadius);
-            highZone = updateZone(
-              highZone,
-              block.location,
-              config.highLeafRadius,
-            );
-          }
-        },
-      },
-    );
+  const durability = mainhandItem.getComponent("minecraft:durability") as
+    | ItemDurabilityComponent
+    | undefined;
 
-  const { connectedPositions: leafDestroyPositions } = getConnectedPositions(
-    player.dimension,
-    leafId,
-    aroundLeafList,
-    {
-      maxCount: config.maxLeaves,
-      alreadySearchedPosSet: searchedPosSet,
-      zone:
-        (treeDestroyPositions.length > config.lowBorderLog
-          ? highZone
-          : lowZone) ?? undefined,
+  const unbreaking = getEnchantmentLevel(mainhandItem, "unbreaking");
+  const fortune = getEnchantmentLevel(mainhandItem, "fortune");
+  const silkTouch = getEnchantmentLevel(mainhandItem, "silk_touch");
+
+  return {
+    equippable,
+    mainhandItem,
+    durability,
+    enchant: {
+      unbreaking,
+      fortune,
+      silkTouch,
     },
+  };
+}
+
+function oreMassDestruction(
+  event: PlayerBreakBlockAfterEvent,
+  breakableBlockIdSet: ReadonlySet<string>,
+) {
+  const blockId = event.brokenBlockPermutation.type.id;
+  if (!breakableBlockIdSet.has(blockId)) return;
+
+  const player = event.player;
+  if (player.isSneaking) return;
+
+  const info = getMainHandItemInfo(player);
+  if (!info) return;
+  const { equippable, mainhandItem, durability, enchant } = info;
+
+  if (!durability || !mainhandItem.typeId.endsWith("_pickaxe")) return;
+
+  const remainingDurability = durability.maxDurability - durability.damage;
+  if (remainingDurability <= 1) return;
+
+  const { connectedPositions: destroyPositions } = getConnectedPositions(
+    player.dimension,
+    getAroundPositions(event.block.location),
+    (block) => {
+      return blockId === block.typeId;
+    },
+    { maxCount: 100 },
   );
 
-  player.sendMessage(`葉っぱの破壊数: ${leafDestroyPositions.length}`);
+  for (const position of destroyPositions) {
+    destroyBlock(event.dimension, position, player);
+  }
 
-  for (let position of [...treeDestroyPositions, ...leafDestroyPositions]) {
-    destroyBlock(event.dimension, position);
+  if (player.getGameMode() !== GameMode.Creative) {
+    durability.damage = Math.min(
+      durability.maxDurability,
+      calculateDurabilityDamage(
+        enchant.unbreaking,
+        durability.damage + destroyPositions.length,
+      ),
+    );
+    equippable.setEquipment(EquipmentSlot.Mainhand, mainhandItem);
   }
 }
 
-function destroyBlock(dimension: Dimension, position: Vector3) {
-  try {
-    dimension.runCommand(
-      `setblock ${position.x} ${position.y} ${position.z} air destroy`,
+function treeMassDestruction(event: PlayerBreakBlockAfterEvent) {
+  const blockId = event.brokenBlockPermutation.type.id;
+  if (!(blockId in LOG_TO_LEAVES)) return;
+
+  const player = event.player;
+  if (player.isSneaking) return;
+
+  const info = getMainHandItemInfo(player);
+  if (!info) return;
+  const { equippable, mainhandItem, durability, enchant } = info;
+
+  if (!durability || !mainhandItem.typeId.endsWith("_axe")) return;
+
+  const remainingDurability = durability.maxDurability - durability.damage;
+  if (remainingDurability <= 1) return;
+
+  let zone: Zone | null = null;
+
+  const leafId = LOG_TO_LEAVES[blockId as keyof typeof LOG_TO_LEAVES];
+
+  // 1. 原木の探索
+  const aroundLeafList: Vector3[] = [];
+  const { connectedPositions: treeDestroyPositions, searchedSet } =
+    getConnectedPositions(
+      player.dimension,
+      getAroundPositions(event.block.location),
+      (block) => {
+        // 原木周囲の葉っぱを収集
+        if (block.typeId === leafId) {
+          aroundLeafList.push(block.location);
+        }
+        // 原木であればゾーン拡張＆破壊対象とする
+        if (block.typeId === blockId) {
+          zone = expandZone(zone, block.location, config.leafRadius);
+          return true;
+        }
+        return false;
+      },
+      { maxCount: config.maxLog },
     );
+
+  const connectedTreeSet = new Set(
+    treeDestroyPositions.map((pos) => vector3ToString(pos)),
+  );
+  const connectedOtherTreeAround = new Set<string>();
+
+  let somePersistent = false;
+
+  // 2. 葉っぱの探索
+  const { connectedPositions: leafDestroyPositions } = getConnectedPositions(
+    player.dimension,
+    aroundLeafList,
+    (block) => {
+      // 別の木（破壊対象以外の原木）を検知した場合
+      if (
+        block.typeId === blockId &&
+        !connectedTreeSet.has(vector3ToString(block.location))
+      ) {
+        connectedOtherTreeAround.add(vector3ToString(block.location));
+        getAroundPositions(block.location).forEach((pos) => {
+          connectedOtherTreeAround.add(vector3ToString(pos));
+        });
+      }
+
+      // ゾーン内の葉っぱであれば破壊対象とする
+      const inZone = zone ? isInZone(zone, block.location, true) : true;
+      if (block.typeId === leafId && inZone) {
+        const isPersistent = block.permutation.getState("persistent_bit");
+        if (isPersistent === false) {
+          somePersistent = true;
+        }
+        return true;
+      }
+      return false;
+    },
+    {
+      maxCount: config.maxLeaves,
+      searchedSet: searchedSet,
+    },
+  );
+
+  // 3. 破壊処理
+  if (!somePersistent) return;
+
+  const destroyPositions = [
+    ...treeDestroyPositions,
+    ...leafDestroyPositions.filter(
+      (pos) => !connectedOtherTreeAround.has(vector3ToString(pos)),
+    ),
+  ];
+  for (const position of destroyPositions) {
+    destroyBlock(event.dimension, position, player);
+  }
+
+  if (player.getGameMode() !== GameMode.Creative) {
+    durability.damage = Math.min(
+      durability.maxDurability,
+      calculateDurabilityDamage(
+        enchant.unbreaking,
+        durability.damage + treeDestroyPositions.length,
+      ),
+    );
+    equippable.setEquipment(EquipmentSlot.Mainhand, mainhandItem);
+  }
+}
+/**
+ * アイテムの指定したエンチャントのレベルを取得する関数
+ * @param item - 対象のアイテム
+ * @param enchantment - 取得したいエンチャントのIDまたはEnchantmentType (例: "unbreaking", "fortune", "efficiency")
+ * @returns エンチャントのレベル（付いていない場合は 0）
+ */
+function getEnchantmentLevel(
+  item: ItemStack,
+  enchantment: string | EnchantmentType,
+): number {
+  if (!item) return 0;
+
+  const enchantable = item.getComponent(ItemComponentTypes.Enchantable);
+  if (!enchantable) return 0;
+
+  const result = enchantable.getEnchantment(enchantment);
+
+  if (result) {
+    return result.level; // 1, 2, 3 などのレベルを返す
+  }
+
+  return 0; // エンチャントが付いていない場合
+}
+/**
+ * 耐久力（Unbreaking）エンチャントを考慮したダメージ期待値を計算して返します。
+ *
+ * @param unbreakingLevel - 耐久力エンチャントのレベル (0以上の整数)
+ * @param [baseDamage=1] - 本来与える基本ダメージ（省略時は 1）
+ * @returns 適用すべきダメージ量（四捨五入された整数）
+ */
+function calculateDurabilityDamage(unbreakingLevel: number, baseDamage = 1) {
+  // レベルが0以下（エンチャントなし）の場合は基本ダメージそのまま
+  if (unbreakingLevel <= 0) {
+    return Math.round(baseDamage);
+  }
+
+  // ダメージを受ける確率の期待値: 1 / (レベル + 1)
+  const expectedDamage = baseDamage / (unbreakingLevel + 1);
+
+  // 四捨五入して整数を返す
+  return Math.round(expectedDamage);
+}
+
+/**
+ * ブロックの破壊とツールのエンチャント（幸運/シルクタッチ等）を反映したドロップ処理
+ */
+function destroyBlock(
+  dimension: Dimension,
+  position: Vector3,
+  player?: Player,
+) {
+  try {
+    if (player && player.isValid) {
+      // 1. プレイヤーの手持ちツール（メインハンド）のエンチャントを反映してドロップ生成
+      player.runCommand(
+        `loot spawn ${position.x} ${position.y} ${position.z} mine ${position.x} ${position.y} ${position.z} mainhand`,
+      );
+      // 2. ブロックを消去
+      dimension.runCommand(
+        `setblock ${position.x} ${position.y} ${position.z} air`,
+      );
+    } else {
+      // プレイヤーが無効な場合のフォールバック（通常破壊）
+      dimension.runCommand(
+        `setblock ${position.x} ${position.y} ${position.z} air destroy`,
+      );
+    }
   } catch (e) {}
 }
 
@@ -225,26 +465,22 @@ system.afterEvents.scriptEventReceive.subscribe(
       }
     };
 
-    // /scriptevent tree:status
     if (id === "tree:status") {
       sendMessage(
         `§e--- 一括破壊 設定一覧 ---\n` +
           `§b原木破壊上限 (log): §f${config.maxLog}\n` +
           `§b葉っぱ破壊上限 (leaf): §f${config.maxLeaves}\n` +
-          `§b小さい木の葉っぱ破壊半径 (lowradius): §f${config.lowLeafRadius}\n` +
-          `§b大きい木の葉っぱ破壊半径 (highradius): §f${config.highLeafRadius}\n` +
-          `§b小さい木の原木の数の上限 (logborder): §f${config.lowBorderLog}\n` +
+          `§b葉っぱ破壊半径 (radius): §f${config.leafRadius}\n` +
           `§7[変更例] /scriptevent tree:set log 100`,
       );
       return;
     }
 
-    // /scriptevent tree:set <log|leaf|radius> <数値>
     if (id === "tree:set") {
       const args = message.trim().split(/\s+/);
       if (args.length < 2) {
         sendMessage(
-          "§c[エラー] 使用法: /scriptevent tree:set <log|leaf|lowradius|highradius> <数値>",
+          "§c[エラー] 使用法: /scriptevent tree:set <log|leaf|radius> <数値>",
         );
         return;
       }
@@ -267,23 +503,9 @@ system.afterEvents.scriptEventReceive.subscribe(
           config.maxLeaves = value;
           sendMessage(`§a葉っぱの破壊上限を §f${value} §aに設定しました。`);
           break;
-        case "lowradius":
-          config.lowLeafRadius = value;
-          sendMessage(
-            `§a小さい木の葉っぱの破壊半径を §f${value} §aに設定しました。`,
-          );
-          break;
-        case "highradius":
-          config.highLeafRadius = value;
-          sendMessage(
-            `§a大きい木の葉っぱの破壊半径を §f${value} §aに設定しました。`,
-          );
-          break;
-        case "logborder":
-          config.lowBorderLog = value;
-          sendMessage(
-            `§a小さい木の原木の数の上限を §f${value} §aに設定しました。`,
-          );
+        case "radius":
+          config.leafRadius = value;
+          sendMessage(`§a葉っぱの破壊半径を §f${value} §aに設定しました。`);
           break;
         default:
           sendMessage(
@@ -299,5 +521,6 @@ system.afterEvents.scriptEventReceive.subscribe(
 // 2. ブロックを壊したときのイベント
 // ==========================================
 world.afterEvents.playerBreakBlock.subscribe((event) => {
+  oreMassDestruction(event, ORE_BLOCK_IDS);
   treeMassDestruction(event);
 });
