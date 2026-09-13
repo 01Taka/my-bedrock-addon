@@ -12,13 +12,13 @@ export const PLAYER_MOVEMENT_CONFIG = {
   /** インパルス強度の最大値（ブロック換算。何ブロック分の距離の勢いを最大とするか） */
   MAX_IMPULSE_DISTANCE: 40,
   /** 横方向の重み（横方向の距離に対して加えるインパルス強度の係数） */
-  HORIZONTAL_WEIGHT: 0.12,
+  HORIZONTAL_WEIGHT: 0.1,
   /** 縦方向の重み（縦方向の距離に対して加えるインパルス強度の係数） */
   VERTICAL_WEIGHT: 0.07,
   /** 高さオフセット（着弾地点の何マス上を目標とするか） */
-  HEIGHT_OFFSET: 8,
-  /** プレイヤーの横入力による偏向加算インパルスの重み */
-  STEERING_WEIGHT: 0.9,
+  HEIGHT_OFFSET: 10,
+  /** プレイヤーの横入力による偏向回転角度（最大角度、度数法） */
+  STEERING_ANGLE_DEGREES: 20,
   /** プレイヤーの後退入力による減速加算インパルスの重み */
   DISTANCE_DAMPING_WEIGHT: 0.3,
   /** プレイヤーの前進入力による加速加算インパルスの重み */
@@ -30,13 +30,13 @@ export const PLAYER_MOVEMENT_CONFIG = {
  */
 export const ENTITY_PULL_CONFIG = {
   /** 横方向の引き寄せインパルス係数 */
-  HORIZONTAL_WEIGHT: 0.2,
-  /** Y座標差が閾値（2ブロック）以下のときの基本垂直インパルス（一定値） */
-  BASE_VERTICAL_IMPULSE: 1.0,
+  HORIZONTAL_WEIGHT: 0.25,
+  /** Y座標差が閾値以下のときの基本垂直インパルス（一定値） */
+  BASE_VERTICAL_IMPULSE: 0.4,
   /** 高低差に応じた垂直インパルス加算を開始するY座標差の閾値（ブロック単位） */
-  HEIGHT_DIFF_THRESHOLD: 0.5,
+  HEIGHT_DIFF_THRESHOLD: 0.1,
   /** 高低差が閾値を超えた場合に加算する垂直インパルス係数（1ブロックあたり） */
-  HEIGHT_DIFF_VERTICAL_WEIGHT: 0.2,
+  HEIGHT_DIFF_VERTICAL_WEIGHT: 0.3,
   /** 最大インパルス強度（過度な吹っ飛び防止） */
   MAX_IMPULSE_SPEED: 2.5,
   /** プレイヤー手前で止めるためのオフセット距離（ブロック単位） */

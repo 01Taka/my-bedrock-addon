@@ -57,15 +57,18 @@ export function applyPlayerMovementImpulse(
   const inputWorldX = moveInput.y * viewFwdX + moveInput.x * rightX;
   const inputWorldZ = moveInput.y * viewFwdZ + moveInput.x * rightZ;
 
-  // 3. 入力ベクトルを発射方向に対して「水平（平行）成分」と「垂直成分」に分解
+  // 3. 入力ベクトルを発射方向に対して「水平（平行）成分」と「垂直（横）成分」に分解
   // 平行成分（スカラー積: 発射方向への推進/後退成分）
   const parallelInput = inputWorldX * uLaunchX + inputWorldZ * uLaunchZ;
 
-  // 垂直成分（ベクトル: 発射方向に対して横向きの入力）
-  const perpInputX = inputWorldX - parallelInput * uLaunchX;
-  const perpInputZ = inputWorldZ - parallelInput * uLaunchZ;
+  // 発射方向に対する右方向単位ベクトル (Right: 時計回りに90度回転)
+  const uLaunchRightX = -uLaunchZ;
+  const uLaunchRightZ = uLaunchX;
 
-  // 4. プレイヤー入力による加算インパルスの計算（足し算）
+  // 横向き入力成分（スカラー積: 右が正 / 左が負）
+  const steerInput = inputWorldX * uLaunchRightX + inputWorldZ * uLaunchRightZ;
+
+  // 4. プレイヤー入力によるインパルスの計算
   // (A) 発射方向に対する前進加速・後退減速の加算インパルス
   let parallelAdd = 0;
   if (parallelInput > 0) {
@@ -78,14 +81,22 @@ export function applyPlayerMovementImpulse(
   const parallelAddX = parallelAdd * uLaunchX;
   const parallelAddZ = parallelAdd * uLaunchZ;
 
-  // (B) 発射方向に対する横向き偏向の加算インパルス
-  const steerX = perpInputX * config.STEERING_WEIGHT;
-  const steerZ = perpInputZ * config.STEERING_WEIGHT;
+  // 基本水平インパルス（発射ベクトル基準 ＋ 前後加減速）
+  const baseHorizX = deltaX * config.HORIZONTAL_WEIGHT + parallelAddX;
+  const baseHorizZ = deltaZ * config.HORIZONTAL_WEIGHT + parallelAddZ;
 
-  // 5. 最終インパルスベクトルの合成（基本インパルスに入力インパルスを足し算）
-  let impulseX = deltaX * config.HORIZONTAL_WEIGHT + parallelAddX + steerX;
+  // (B) 発射方向に対する横向き偏向（大きさはそのままにベクトル全体を回転）
+  const maxSteerAngleRad =
+    ((config.STEERING_ANGLE_DEGREES ?? 30) * Math.PI) / 180;
+  const steerAngle = steerInput * maxSteerAngleRad;
+
+  const cos = Math.cos(steerAngle);
+  const sin = Math.sin(steerAngle);
+
+  // 5. 最終インパルスベクトルの合成（回転した水平インパルス ＋ 垂直インパルス）
+  let impulseX = baseHorizX * cos - baseHorizZ * sin;
   let impulseY = deltaY * config.VERTICAL_WEIGHT;
-  let impulseZ = deltaZ * config.HORIZONTAL_WEIGHT + parallelAddZ + steerZ;
+  let impulseZ = baseHorizX * sin + baseHorizZ * cos;
 
   // 6. 最大インパルス制限（ブロック換算距離の上限）
   // MAX_IMPULSE_DISTANCE（ブロック）分の勢いを最大値としてクランプ
