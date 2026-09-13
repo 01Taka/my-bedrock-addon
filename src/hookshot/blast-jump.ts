@@ -20,29 +20,26 @@ export const HOOKSHOT_ITEM_ID = "addon:hookshot";
  */
 export const HOOKSHOT_BLAST_CONFIG: HookshotBlastConfig = {
   /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 上方向インパルス強度 */
-  PRE_HOOK_UPWARD_IMPULSE: 1.2,
+  PRE_HOOK_UPWARD_IMPULSE: 0.8,
   /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
   PRE_HOOK_DOWNWARD_INERTIA_RETENTION: 0.3,
-  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 水平慣性の維持率（0.0: 完全リセット, 1.0: 減衰なし, 0.4: 40%維持） */
-  PRE_HOOK_HORIZONTAL_INERTIA_RETENTION: 0.4,
   /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
   PRE_HOOK_HORIZONTAL_INPUT_WEIGHT: 0.75,
   /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 最大速度制限 */
   PRE_HOOK_MAX_IMPULSE_SPEED: 2.5,
 
   /** フックショット着弾後の爆風ジャンプ: 上方向インパルス強度 */
-  POST_HOOK_UPWARD_IMPULSE: 1.4,
+  POST_HOOK_UPWARD_IMPULSE: 1.0,
   /** フックショット着弾後の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
   POST_HOOK_DOWNWARD_INERTIA_RETENTION: 0.3,
   /** フックショット着弾後の爆風ジャンプ: 水平慣性の維持率（0.0: 完全リセット, 1.0: 減衰なし, 0.6: 60%維持） */
-  POST_HOOK_HORIZONTAL_INERTIA_RETENTION: 0.4,
   /** フックショット着弾後の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
   POST_HOOK_HORIZONTAL_INPUT_WEIGHT: 0.1,
   /** フックショット着弾後の爆風ジャンプ: 最大速度制限 */
   POST_HOOK_MAX_IMPULSE_SPEED: 3.0,
 
   /** 前入力時の水平速度減衰率 */
-  FORWARD_HORIZONTAL_RETENTION: 0.7,
+  FORWARD_HORIZONTAL_RETENTION: 0.8,
   /** 入力なし時の水平速度減衰率 */
   NEUTRAL_HORIZONTAL_RETENTION: 0.3,
   /** 後ろ入力時に移動方向と反対方向に与える水平インパルス強度 */
@@ -104,8 +101,10 @@ interface FallImmunityState {
   startY: number;
   /** startY - IMMUNITY_TRIGGER_Y_OFFSET 以下に到達してからの残りtick数 */
   remainingTicks: number;
-  /** 発動してからの経過tick数（発動直後の誤判定・誤クリア防止用） */
+  /** 発動してからの経過tick数（発動直後の誤判定防止用） */
   elapsedTicks: number;
+  /** 接地（isOnGround）が継続しているtick数 */
+  groundTicks: number;
 }
 
 // プレイヤーごとの落下ダメージ無効化状態
@@ -130,6 +129,7 @@ export function startFallDamageImmunity(
     startY: player.location.y,
     remainingTicks: config.FALL_DAMAGE_IMMUNITY_TICKS,
     elapsedTicks: 0,
+    groundTicks: 0,
   });
 }
 
@@ -156,15 +156,19 @@ export function updateFallDamageImmunity(
 
   state.elapsedTicks += deltaTicks;
 
-  // 発動直後（最初の4tick = 0.2秒）は地面判定によるクリアをスキップ
-  if (state.elapsedTicks <= 4) {
-    return;
-  }
-
-  // 地面に着地している場合：通知なし（スキップ）で静かに終了
+  // 地面に着地している場合
   if (player.isOnGround) {
-    clearFallDamageImmunity(player);
+    if (state.elapsedTicks > 4) {
+      state.groundTicks += deltaTicks;
+      // 接地状態が安定（4tick以上継続）したら、ダメージ判定通過済みと判断して静かにクリア
+      if (state.groundTicks >= 4) {
+        clearFallDamageImmunity(player);
+        return;
+      }
+    }
     return;
+  } else {
+    state.groundTicks = 0;
   }
 
   // 空中で発動地点 - IMMUNITY_TRIGGER_Y_OFFSET 以下の高さに達している場合、タイマーをカウントダウン
@@ -214,8 +218,13 @@ export function handleBlastJumpDamage(event: EntityHurtBeforeEvent): void {
   if (cause === EntityDamageCause.fall) {
     if (isFallDamageImmune(player)) {
       event.cancel = true;
-      // 着地による落下ダメージを無効化したので、静かに無効化を終了
-      clearFallDamageImmunity(player);
+      event.damage = 0;
+      // 着地による落下ダメージを無効化したので、次tickで静かに無効化を終了
+      system.run(() => {
+        if (player.isValid) {
+          clearFallDamageImmunity(player);
+        }
+      });
     }
   }
 }
@@ -289,11 +298,6 @@ export function handlePlayerGroundTouch(player: Player): void {
   resetBlastJump(player);
   setHookshotLandedInAir(player, false);
   setJumpButtonReleasedInAir(player, false);
-
-  const state = fallDamageImmunityMap.get(player.id);
-  if (state && state.elapsedTicks > 4) {
-    clearFallDamageImmunity(player);
-  }
 }
 
 /**
@@ -366,9 +370,6 @@ export function executeBlastJump(
   const downwardRetentionRate = isPostHook
     ? config.POST_HOOK_DOWNWARD_INERTIA_RETENTION
     : config.PRE_HOOK_DOWNWARD_INERTIA_RETENTION;
-  const retentionRate = isPostHook
-    ? config.POST_HOOK_HORIZONTAL_INERTIA_RETENTION
-    : config.PRE_HOOK_HORIZONTAL_INERTIA_RETENTION;
   const inputWeight = isPostHook
     ? config.POST_HOOK_HORIZONTAL_INPUT_WEIGHT
     : config.PRE_HOOK_HORIZONTAL_INPUT_WEIGHT;

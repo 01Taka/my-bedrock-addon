@@ -7,11 +7,11 @@ import { HOOKSHOT_BLAST_CONFIG } from "./blast-jump";
  */
 export const ENTITY_PULL_CONFIG: EntityPullConfig = {
   /** 横方向の引き寄せインパルス係数 */
-  HORIZONTAL_WEIGHT: 1.0,
+  HORIZONTAL_WEIGHT: 0.7,
   /** Y座標差が閾値（2ブロック）以下のときの基本垂直インパルス（一定） */
-  BASE_VERTICAL_IMPULSE: 2.0,
+  BASE_VERTICAL_IMPULSE: 1.0,
   /** 高低差に応じた垂直インパルス加算を開始するY座標差の閾値（ブロック単位） */
-  HEIGHT_DIFF_THRESHOLD: 2.0,
+  HEIGHT_DIFF_THRESHOLD: 0.0,
   /** 高低差が閾値を超えた場合に加算する垂直インパルス係数（1ブロックあたり） */
   HEIGHT_DIFF_VERTICAL_WEIGHT: 0.2,
   /** 最大インパルス速度 */

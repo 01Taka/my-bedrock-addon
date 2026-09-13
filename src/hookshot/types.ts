@@ -68,8 +68,6 @@ export interface HookshotBlastConfig {
   PRE_HOOK_UPWARD_IMPULSE: number;
   /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
   PRE_HOOK_DOWNWARD_INERTIA_RETENTION: number;
-  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 水平慣性の維持率（0.0: 完全リセット, 1.0: 減衰なし, 0.4: 40%維持） */
-  PRE_HOOK_HORIZONTAL_INERTIA_RETENTION: number;
   /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
   PRE_HOOK_HORIZONTAL_INPUT_WEIGHT: number;
   /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 最大速度制限 */
@@ -79,8 +77,6 @@ export interface HookshotBlastConfig {
   POST_HOOK_UPWARD_IMPULSE: number;
   /** フックショット着弾後の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
   POST_HOOK_DOWNWARD_INERTIA_RETENTION: number;
-  /** フックショット着弾後の爆風ジャンプ: 水平慣性の維持率（0.0: 完全リセット, 1.0: 減衰なし, 0.6: 60%維持） */
-  POST_HOOK_HORIZONTAL_INERTIA_RETENTION: number;
   /** フックショット着弾後の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
   POST_HOOK_HORIZONTAL_INPUT_WEIGHT: number;
   /** フックショット着弾後の爆風ジャンプ: 最大速度制限 */
@@ -119,7 +115,7 @@ export interface HookshotBlastConfig {
   FINISHER_KNOCKBACK_FORCE: number;
   /** 引き寄せモブへのフィニッシャー攻撃時の上方向ノックバック補正 */
   FINISHER_VERTICAL_LIFT: number;
-  /** 爆風ジャンプ発動地点からのYオフセット以下に到達してからの落下ダメージ無効化時間（tick単位: 40tick = 2秒） */
+  /** 爆風ジャンプ発動時のY座標以下に到達してからの落下ダメージ無効化時間（tick単位: 40tick = 2秒） */
   FALL_DAMAGE_IMMUNITY_TICKS: number;
   /** 落下ダメージ無効化のカウントダウン開始Yオフセット（発動地点Y - この値 以下でカウントダウン開始。デフォルト: 3） */
   IMMUNITY_TRIGGER_Y_OFFSET: number;
@@ -132,4 +128,3 @@ export interface HookshotBlastConfig {
   /** 落下ダメージ無効化終了時のサウンドピッチ */
   IMMUNITY_EXPIRE_SOUND_PITCH: number;
 }
-
