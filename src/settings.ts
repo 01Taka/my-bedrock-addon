@@ -1,4 +1,5 @@
 import {
+  world,
   Player,
   system,
   ScriptEventCommandMessageAfterEvent,
@@ -11,6 +12,7 @@ export const SETTING_KEYS = {
   ORE: "setting_ore",
   TORCH: "setting_torch",
   GRAVE: "setting_grave",
+  GRAVE_OTHERS: "setting_grave_others",
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -20,6 +22,7 @@ export interface PlayerSettings {
   ore: boolean;
   torch: boolean;
   grave: boolean;
+  graveOthers: boolean;
 }
 
 /**
@@ -61,6 +64,7 @@ export function getPlayerSettings(player: Player): PlayerSettings {
     ore: isSettingEnabled(player, SETTING_KEYS.ORE),
     torch: isSettingEnabled(player, SETTING_KEYS.TORCH),
     grave: isSettingEnabled(player, SETTING_KEYS.GRAVE),
+    graveOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
   };
 }
 
@@ -78,23 +82,30 @@ export function showSettingsForm(player: Player): void {
     defaultValue: current.torch,
   });
   form.toggle("墓機能 (死亡時アイテム保護)", { defaultValue: current.grave });
+  form.toggle("他人の墓の回収 (他人の墓石を開ける)", {
+    defaultValue: current.graveOthers,
+  });
 
   form
     .show(player)
     .then((response) => {
       if (response.canceled || !response.formValues) return;
 
-      const [treeVal, oreVal, torchVal, graveVal] = response.formValues as [
-        boolean,
-        boolean,
-        boolean,
-        boolean,
-      ];
+      const [treeVal, oreVal, torchVal, graveVal, graveOthersVal] =
+        response.formValues as [
+          boolean,
+          boolean,
+          boolean,
+          boolean,
+          boolean,
+        ];
 
       setSettingEnabled(player, SETTING_KEYS.TREE, treeVal);
       setSettingEnabled(player, SETTING_KEYS.ORE, oreVal);
       setSettingEnabled(player, SETTING_KEYS.TORCH, torchVal);
       setSettingEnabled(player, SETTING_KEYS.GRAVE, graveVal);
+      setSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS, graveOthersVal);
+      world.gameRules.keepInventory = graveVal;
 
       const statusText = (val: boolean) => (val ? "§a[ON]§r" : "§c[OFF]§r");
 
@@ -105,6 +116,7 @@ export function showSettingsForm(player: Player): void {
           `・鉱石の破壊: ${statusText(oreVal)}\n` +
           `・オフハンドたいまつ: ${statusText(torchVal)}\n` +
           `・墓機能: ${statusText(graveVal)}\n` +
+          `・他人の墓の回収: ${statusText(graveOthersVal)}\n` +
           `§a============================`,
       );
     })
@@ -166,8 +178,19 @@ export function handleSettingsScriptEvent(
     case "addon:grave": {
       const next = !isSettingEnabled(player, SETTING_KEYS.GRAVE);
       setSettingEnabled(player, SETTING_KEYS.GRAVE, next);
+      world.gameRules.keepInventory = next;
       player.sendMessage(
         `§6[設定] 墓機能 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+      );
+      break;
+    }
+
+    case "addon:grave_others":
+    case "addon:graveothers": {
+      const next = !isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS);
+      setSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS, next);
+      player.sendMessage(
+        `§6[設定] 他人の墓の回収 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
       );
       break;
     }
@@ -182,6 +205,7 @@ export function handleSettingsScriptEvent(
           `・鉱石の破壊: ${statusText(settings.ore)}\n` +
           `・オフハンドたいまつ: ${statusText(settings.torch)}\n` +
           `・墓機能: ${statusText(settings.grave)}\n` +
+          `・他人の墓の回収: ${statusText(settings.graveOthers)}\n` +
           `§7(/scriptevent addon:menu で設定画面を開く)\n` +
           `§a============================`,
       );
@@ -197,6 +221,7 @@ export function handleSettingsScriptEvent(
           `・/scriptevent addon:ore : 鉱石の破壊のON/OFF切り替え\n` +
           `・/scriptevent addon:torch : オフハンドたいまつのON/OFF切り替え\n` +
           `・/scriptevent addon:grave : 墓機能のON/OFF切り替え\n` +
+          `・/scriptevent addon:grave_others : 他人の墓の回収のON/OFF切り替え\n` +
           `・/scriptevent addon:status : 現在の設定状態を確認\n` +
           `§7※ スニーク中に棒(Stick)または時計(Clock)を使用して設定画面を開くこともできます。\n` +
           `§a============================`,
