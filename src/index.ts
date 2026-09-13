@@ -11,6 +11,10 @@ import {
   handleGraveBeforeBreak,
   handleGravePlayerSpawn,
 } from "./grave";
+import {
+  handleSettingsScriptEvent,
+  handleSettingsItemUse,
+} from "./settings";
 
 // 初期化
 system.run(() => {
@@ -33,8 +37,11 @@ world.afterEvents.playerBreakBlock.subscribe((event) => {
   treeMassDestruction(event);
 });
 
-// アイテム使用
+// アイテム使用 (たいまつ持ち替え / 設定UI表示)
 world.beforeEvents.itemUse.subscribe((event) => {
+  handleSettingsItemUse(event, () => {
+    event.cancel = true;
+  });
   handleTorchSwap(event.source, () => {
     event.cancel = true;
   });
@@ -49,3 +56,9 @@ world.afterEvents.entityDie.subscribe((event) => {
 world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
 });
+
+// スクリプトイベントコマンド (/scriptevent addon:...)
+system.afterEvents.scriptEventReceive.subscribe((event) => {
+  handleSettingsScriptEvent(event);
+});
+

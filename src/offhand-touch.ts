@@ -9,6 +9,7 @@ import {
   Dimension,
 } from "@minecraft/server";
 import { Vector3Utils } from "@minecraft/math";
+import { isSettingEnabled, SETTING_KEYS } from "./settings";
 
 // 対象とするたいまつとそれぞれの明るさレベル (0〜15)
 const TORCH_LIGHT_LEVELS: Record<string, number> = {
@@ -193,6 +194,14 @@ system.runInterval(() => {
       continue;
     }
 
+    // オフハンドたいまつ機能が無効な場合
+    if (!isSettingEnabled(player, SETTING_KEYS.TORCH)) {
+      if (activeLights.has(playerId)) {
+        clearPreviousLight(playerId);
+      }
+      continue;
+    }
+
     const torchInfo = getOffhandTorchLightLevel(player);
 
     // たいまつを持っていない場合
@@ -313,6 +322,7 @@ world.afterEvents.playerLeave.subscribe((event) => {
 // 3. スニーク右クリックによるたいまつ持ち替え処理
 // ==========================================
 export function handleTorchSwap(player: Player, cancelCallback: () => void) {
+  if (!isSettingEnabled(player, SETTING_KEYS.TORCH)) return;
   if (!player.isSneaking) return;
 
   const equippable = player.getComponent("minecraft:equippable");

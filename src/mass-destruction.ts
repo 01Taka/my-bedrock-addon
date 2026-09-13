@@ -14,6 +14,7 @@ import {
   Vector3,
 } from "@minecraft/server";
 import { getMainHandItemInfo } from "./utils";
+import { isSettingEnabled, SETTING_KEYS } from "./settings";
 
 // 設定オブジェクト
 const config = {
@@ -250,10 +251,12 @@ export function oreMassDestruction(
   event: PlayerBreakBlockAfterEvent,
   breakableBlockIdSet: ReadonlySet<string>,
 ) {
+  const player = event.player;
+  if (!isSettingEnabled(player, SETTING_KEYS.ORE)) return;
+
   const blockId = event.brokenBlockPermutation.type.id;
   if (!breakableBlockIdSet.has(blockId)) return;
 
-  const player = event.player;
   if (player.isSneaking) return;
 
   const info = getMainHandItemInfo(player);
@@ -291,10 +294,12 @@ export function oreMassDestruction(
 }
 
 export function treeMassDestruction(event: PlayerBreakBlockAfterEvent) {
+  const player = event.player;
+  if (!isSettingEnabled(player, SETTING_KEYS.TREE)) return;
+
   const blockId = event.brokenBlockPermutation.type.id;
   if (!(blockId in LOG_TO_LEAVES)) return;
 
-  const player = event.player;
   if (player.isSneaking) return;
 
   const info = getMainHandItemInfo(player);

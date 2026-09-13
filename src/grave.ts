@@ -13,7 +13,9 @@ import {
   PlayerInteractWithBlockBeforeEvent,
   PlayerBreakBlockBeforeEvent,
   PlayerSpawnAfterEvent,
+  Player,
 } from "@minecraft/server";
+import { isSettingEnabled, SETTING_KEYS } from "./settings";
 
 interface GraveData {
   ownerId: string;
@@ -54,7 +56,7 @@ function getDimensionName(id: string): string {
  */
 export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
   const deadEntity = event.deadEntity;
-  if (deadEntity.typeId !== "minecraft:player") return;
+  if (!(deadEntity instanceof Player)) return;
 
   const player = deadEntity;
   const dimension = player.dimension;
@@ -124,6 +126,25 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
   }
 
   if (items.length === 0) return;
+
+  // 墓機能がOFFの場合は墓を生成せず、死亡地点にアイテムをドロップ
+  if (!isSettingEnabled(player, SETTING_KEYS.GRAVE)) {
+    system.run(() => {
+      try {
+        const dropPos: Vector3 = {
+          x: player.location.x,
+          y: player.location.y,
+          z: player.location.z,
+        };
+        for (const item of items) {
+          dimension.spawnItem(item, dropPos);
+        }
+      } catch (e) {
+        console.error("アイテムドロップエラー: " + e);
+      }
+    });
+    return;
+  }
 
   system.run(() => {
     try {
