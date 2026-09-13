@@ -132,6 +132,10 @@ world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
 
 // スクリプトイベントコマンド (/scriptevent addon:...)
 system.afterEvents.scriptEventReceive.subscribe((event) => {
-  handleSettingsScriptEvent(event);
+  try {
+    handleSettingsScriptEvent(event);
+  } catch (error) {
+    console.error("スクリプトイベント処理エラー:", error);
+  }
 });
 
