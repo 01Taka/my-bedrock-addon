@@ -20,6 +20,9 @@ export const MANUAL_HOOKSHOT_CONFIG = {
   /** 巻き取り開始時に下方向の落下速度をリセット（0に相殺）するかどうか */
   RESET_DOWNWARD_VELOCITY_ON_WIND_START: true,
 
+  /** 巻き取り開始時の爆風クールダウン時間（tick、20tick=1秒。60tick=3秒） */
+  BLAST_COOLDOWN_TICKS: 15,
+
   /** 落下速度リセット＆爆発エフェクトが発動する下方向速度の閾値（ブロック/tick。0.5で約10m/s以上の落下） */
   RESET_DOWNWARD_VELOCITY_THRESHOLD: 0.1,
 
@@ -57,6 +60,9 @@ export const MANUAL_HOOKSHOT_CONFIG = {
 
   /** 解除時の上方向ホップインパルス強度（木の上などに着地しやすくする） */
   RELEASE_UPWARD_IMPULSE: 0.8,
+
+  /** 空中解除時に付与する低速落下（slow_falling）の持続tick数（20tick=1秒。落下ダメージをリセット） */
+  SLOW_FALLING_TICKS_ON_RELEASE: 2,
 
   /** 解除時の小爆発パーティクル */
   RELEASE_PARTICLE: "minecraft:explosion_particle",
