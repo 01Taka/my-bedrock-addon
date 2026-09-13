@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "My Script Addon Resources v51",
+    "name": "My Script Addon Resources v53",
     "description": "Resource Pack for My Addon",
     "uuid": "beaaa008-3273-4f2d-8c2e-011fd9ddb6b1",
     "version": [
       1,
       0,
-      51
+      53
     ],
     "min_engine_version": [
       1,
@@ -23,7 +23,7 @@
       "version": [
         1,
         0,
-        51
+        53
       ]
     }
   ]

@@ -83,11 +83,18 @@ export function executeHookshot(player: Player): boolean {
   let blockHitPos: Vector3 | null = null;
 
   if (blockHit) {
-    blockHitPos = blockHit.faceLocation ?? {
-      x: blockHit.block.location.x + 0.5,
-      y: blockHit.block.location.y + 0.5,
-      z: blockHit.block.location.z + 0.5,
-    };
+    const blockLoc = blockHit.block.location;
+    blockHitPos = blockHit.faceLocation
+      ? {
+          x: blockLoc.x + blockHit.faceLocation.x,
+          y: blockLoc.y + blockHit.faceLocation.y,
+          z: blockLoc.z + blockHit.faceLocation.z,
+        }
+      : {
+          x: blockLoc.x + 0.5,
+          y: blockLoc.y + 0.5,
+          z: blockLoc.z + 0.5,
+        };
     blockDistance = Math.hypot(
       blockHitPos.x - playerPos.x,
       blockHitPos.y - playerPos.y,
