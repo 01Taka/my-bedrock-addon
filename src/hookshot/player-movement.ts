@@ -10,9 +10,9 @@ export const PLAYER_MOVEMENT_CONFIG: PlayerMovementConfig = {
   /** インパルスの最大勢い */
   MAX_IMPULSE_DISTANCE: 80,
   /** 横方向の重み（横方向の距離に対して加えるインパルス強度の係数） */
-  HORIZONTAL_WEIGHT: 0.07,
+  HORIZONTAL_WEIGHT: 0.12,
   /** 縦方向の重み（縦方向の距離に対して加えるインパルス強度の係数） */
-  VERTICAL_WEIGHT: 0.12,
+  VERTICAL_WEIGHT: 0.07,
   /** 高さオフセット（着弾地点の何マス上を目標とするか） */
   HEIGHT_OFFSET: 8,
   /** 発射方向への影響の重み（垂直入力による横方向の偏向係数） */

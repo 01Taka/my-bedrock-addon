@@ -17,7 +17,20 @@ import {
   isValidHookshotTarget,
   executeEntityPull,
 } from "./entity-pull";
-import { HookshotParticleConfig } from "./types";
+import {
+  HOOKSHOT_BLAST_CONFIG,
+  HOOKSHOT_ITEM_ID,
+  isHoldingHookshot,
+  isBlastJumpReady,
+  resetBlastJump,
+  consumeBlastJump,
+  executeBlastJump,
+  updateBlastHud,
+  handleBlastJumpButtonInput,
+  setJumpButtonReleased,
+} from "./blast-jump";
+import { handleHookshotEntityHit } from "./combat";
+import { HookshotParticleConfig, HookshotBlastConfig } from "./types";
 
 /**
  * フックショットのパーティクル設定
@@ -37,6 +50,18 @@ export {
   PLAYER_MOVEMENT_CONFIG,
   ENTITY_PULL_CONFIG,
   HEAVY_ENTITY_TYPES,
+  HOOKSHOT_BLAST_CONFIG,
+  HOOKSHOT_ITEM_ID,
+  HookshotBlastConfig,
+  isHoldingHookshot,
+  isBlastJumpReady,
+  resetBlastJump,
+  consumeBlastJump,
+  executeBlastJump,
+  updateBlastHud,
+  handleBlastJumpButtonInput,
+  setJumpButtonReleased,
+  handleHookshotEntityHit,
   executePlayerMovementToBlock,
   executePlayerMovementToEntity,
   executeEntityPull,
@@ -103,9 +128,6 @@ export function spawnHookshotImpact(
   }
 }
 
-/** フックショットのアイテムID */
-export const HOOKSHOT_ITEM_ID = "addon:hookshot";
-
 /**
  * フックショット使用時の処理ハンドラー
  */
@@ -119,19 +141,27 @@ export function handleHookshotUse(
   const player = event.source;
   if (!(player instanceof Player)) return;
 
+  // 発射瞬間のシフト（スニーク）状態を記録
+  const isSneaking = player.isSneaking;
+
   // 通常のアイテム使用動作をキャンセル
   cancelCallback();
 
   // 次の tick で安全に実行（beforeEvent 内での Entity 操作対応）
   system.run(() => {
-    executeHookshot(player);
+    executeHookshot(player, isSneaking);
   });
 }
 
 /**
  * フックショットのレイキャスト判定および機能ディスパッチ
+ * @param player 発射者
+ * @param isSneaking 発射瞬間のスニーク状態（true: モブ引き寄せモード / false: 自身移動モード）
  */
-export function executeHookshot(player: Player): boolean {
+export function executeHookshot(
+  player: Player,
+  isSneaking: boolean = player.isSneaking,
+): boolean {
   const maxDistance = PLAYER_MOVEMENT_CONFIG.MAX_DISTANCE;
   const playerPos = player.location;
   const headPos = player.getHeadLocation();
@@ -198,22 +228,39 @@ export function executeHookshot(player: Player): boolean {
     spawnHookshotTrail(player.dimension, startPos, targetPos);
     spawnHookshotImpact(player.dimension, targetPos);
 
-    // (A) 重量・ボスモブ等の場合はプレイヤーがエンティティに向かって移動
-    if (isHeavyEntity(targetEntity)) {
+    // フックショット着弾により爆風ジャンプをリセット
+    resetBlastJump(player);
+    updateBlastHud(player);
+
+    if (isSneaking) {
+      // 【シフト時】モブ引き寄せモード（大型モブでなければ引き寄せ、大型モブ時は自身も移動しない）
+      if (!isHeavyEntity(targetEntity)) {
+        return executeEntityPull(player, targetEntity);
+      }
+      return true;
+    } else {
+      // 【非シフト時】自分自身の移動モード（対象エンティティに向かって移動）
       return executePlayerMovementToEntity(player, targetEntity);
     }
-
-    // (B) 通常モブ・プレイヤー等の場合はモブを引き寄せる
-    return executeEntityPull(player, targetEntity);
   }
 
-  // ブロックに当たった場合 -> プレイヤーがブロックに向かって移動
+  // ブロックに当たった場合
   if (blockHitPos) {
     // 軌道と着弾エフェクトの描画
     spawnHookshotTrail(player.dimension, startPos, blockHitPos);
     spawnHookshotImpact(player.dimension, blockHitPos);
 
-    return executePlayerMovementToBlock(player, blockHitPos);
+    // フックショット着弾により爆風ジャンプをリセット
+    resetBlastJump(player);
+    updateBlastHud(player);
+
+    if (isSneaking) {
+      // 【シフト時】壁に当たっても自分自身は移動しない
+      return true;
+    } else {
+      // 【非シフト時】プレイヤーがブロックに向かって移動
+      return executePlayerMovementToBlock(player, blockHitPos);
+    }
   }
 
   // 4. 何もヒットしなかった場合（空振り時も発射方向にパーティクルを描画）

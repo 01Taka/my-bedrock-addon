@@ -1,4 +1,10 @@
-import { world, system } from "@minecraft/server";
+import {
+  world,
+  system,
+  InputButton,
+  ButtonState,
+  Player,
+} from "@minecraft/server";
 import {
   ORE_BLOCK_IDS,
   oreMassDestruction,
@@ -15,7 +21,16 @@ import {
   handleSettingsScriptEvent,
   handleSettingsItemUse,
 } from "./settings";
-import { handleHookshotUse } from "./hookshot";
+import {
+  handleHookshotUse,
+  executeBlastJump,
+  resetBlastJump,
+  updateBlastHud,
+  handleBlastJumpButtonInput,
+  setJumpButtonReleased,
+  handleHookshotEntityHit,
+  isHoldingHookshot,
+} from "./hookshot";
 
 // 初期化
 system.run(() => {
@@ -50,6 +65,43 @@ world.beforeEvents.itemUse.subscribe((event) => {
     event.cancel = true;
   });
 });
+
+// ボタン入力（空中でフックショット所持時のジャンプキーで爆風ジャンプ）
+world.afterEvents.playerButtonInput.subscribe((event) => {
+  handleBlastJumpButtonInput(event);
+});
+
+// エンティティ攻撃（フックショットで引き寄せたモブへのフィニッシャー攻撃）
+world.afterEvents.entityHitEntity.subscribe((event) => {
+  handleHookshotEntityHit(event);
+});
+
+// 定期監視ループ（着地による爆風ジャンプのリセット ＆ アクションバーHUD更新）
+system.runInterval(() => {
+  for (const player of world.getAllPlayers()) {
+    if (!player.isValid) continue;
+
+    // 地面に着地した場合は爆風ジャンプをリセット
+    if (player.isOnGround) {
+      resetBlastJump(player);
+      try {
+        if (
+          player.inputInfo?.getButtonState(InputButton.Jump) ===
+          ButtonState.Released
+        ) {
+          setJumpButtonReleased(player);
+        }
+      } catch {
+        // フォールバック
+      }
+    }
+
+    // フックショットを所持している場合はアクションバーHUDを更新
+    if (isHoldingHookshot(player)) {
+      updateBlastHud(player);
+    }
+  }
+}, 2);
 
 // 死亡検知
 world.afterEvents.entityDie.subscribe((event) => {

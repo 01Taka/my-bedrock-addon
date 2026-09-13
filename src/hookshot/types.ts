@@ -30,6 +30,8 @@ export interface EntityPullConfig {
   HORIZONTAL_WEIGHT: number;
   /** 縦方向の引き寄せインパルス（打ち上げ/浮遊成分） */
   VERTICAL_LIFT: number;
+  /** Y軸方向の最低インパルス強度 */
+  MIN_VERTICAL_IMPULSE: number;
   /** 最大インパルス強度（過度な吹っ飛び防止） */
   MAX_IMPULSE_SPEED: number;
   /** プレイヤー手前で止めるためのオフセット距離（ブロック単位） */
@@ -54,5 +56,35 @@ export interface HookshotParticleConfig {
   STEP_DISTANCE: number;
   /** 空振り時のパーティクル描画最大距離 */
   MISS_DISTANCE: number;
+}
+
+/**
+ * 爆風ジャンプおよび引き寄せモブへの攻撃に関する設定型
+ */
+export interface HookshotBlastConfig {
+  /** 爆風ジャンプの上昇インパルス強度 */
+  UPWARD_IMPULSE: number;
+  /** プレイヤーの入力（WASD/スティック）による水平方向インパルスの強度（設定で変更可能） */
+  HORIZONTAL_INPUT_WEIGHT: number;
+  /** 爆風ジャンプの最大速度制限 */
+  MAX_IMPULSE_SPEED: number;
+  /** 爆風パーティクルID */
+  PARTICLE_ID: string;
+  /** 爆風サウンドID */
+  SOUND_ID: string;
+  /** 爆風サウンド音量 */
+  SOUND_VOLUME: number;
+  /** 爆風サウンドピッチ */
+  SOUND_PITCH: number;
+  /** モブ引き寄せタグ名 */
+  PULLED_TAG: string;
+  /** モブ引き寄せタグの持続時間（tick単位: 20tick = 1秒） */
+  PULL_TAG_DURATION_TICKS: number;
+  /** 引き寄せモブへの攻撃ダメージ（16 = 8ハート分） */
+  FINISHER_DAMAGE: number;
+  /** 引き寄せモブへの視線方向ノックバック強度 */
+  FINISHER_KNOCKBACK_FORCE: number;
+  /** 引き寄せモブへのフィニッシャー攻撃時の上方向ノックバック補正 */
+  FINISHER_VERTICAL_LIFT: number;
 }
 

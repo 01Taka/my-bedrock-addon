@@ -1,14 +1,17 @@
-import { Player, Entity, Vector3 } from "@minecraft/server";
+import { Player, Entity, Vector3, system } from "@minecraft/server";
 import { EntityPullConfig } from "./types";
+import { HOOKSHOT_BLAST_CONFIG } from "./blast-jump";
 
 /**
  * モブ引き寄せの内部設定
  */
 export const ENTITY_PULL_CONFIG: EntityPullConfig = {
   /** 横方向の引き寄せインパルス係数 */
-  HORIZONTAL_WEIGHT: 0.3,
+  HORIZONTAL_WEIGHT: 1.0,
   /** 縦方向の引き寄せインパルス（浮遊・持ち上げ成分） */
   VERTICAL_LIFT: 0.2,
+  /** Y軸方向の最低インパルス強度 */
+  MIN_VERTICAL_IMPULSE: 0.2,
   /** 最大インパルス速度 */
   MAX_IMPULSE_SPEED: 2.5,
   /** プレイヤー手前で止めるためのオフセット距離（ブロック単位） */
@@ -105,7 +108,10 @@ export function executeEntityPull(
 
   // インパルス計算
   let impulseX = deltaX * config.HORIZONTAL_WEIGHT;
-  let impulseY = deltaY * config.HORIZONTAL_WEIGHT + config.VERTICAL_LIFT;
+  let impulseY = Math.max(
+    config.MIN_VERTICAL_IMPULSE,
+    deltaY * config.HORIZONTAL_WEIGHT + config.VERTICAL_LIFT,
+  );
   let impulseZ = deltaZ * config.HORIZONTAL_WEIGHT;
 
   // 速度ベクトルの大きさを制限
@@ -129,6 +135,23 @@ export function executeEntityPull(
     volume: config.SOUND_VOLUME,
     pitch: config.SOUND_PITCH,
   });
+
+  // 引き寄せタグを付与し、一定時間（20tick = 1秒）後に自動削除
+  try {
+    const tag = HOOKSHOT_BLAST_CONFIG.PULLED_TAG;
+    targetEntity.addTag(tag);
+    system.runTimeout(() => {
+      try {
+        if (targetEntity.isValid && targetEntity.hasTag(tag)) {
+          targetEntity.removeTag(tag);
+        }
+      } catch {
+        // エンティティ消滅時のエラー防止
+      }
+    }, HOOKSHOT_BLAST_CONFIG.PULL_TAG_DURATION_TICKS);
+  } catch {
+    // 例外防止
+  }
 
   return true;
 }
