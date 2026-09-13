@@ -34,11 +34,15 @@ import {
   updateFallDamageImmunity,
   isHoldingHookshot,
 } from "./hookshot";
+import { initManualHookshot } from "./manual-hookshot";
 
 // 初期化
 system.run(() => {
   world.gameRules.keepInventory = true;
 });
+
+// 手動巻取り式フックショットの初期化
+initManualHookshot();
 
 // プレイヤー復活時の座標メモ紙付与
 world.afterEvents.playerSpawn.subscribe((event) => {
