@@ -6,6 +6,8 @@ import { Vector3, Vector2 } from "@minecraft/server";
 export interface PlayerMovementConfig {
   /** 着弾可能な最大距離（ブロック単位） */
   MAX_DISTANCE: number;
+  /** インパルス強度の最大値（ブロック換算。何ブロック分の距離の勢いを最大とするか） */
+  MAX_IMPULSE_DISTANCE: number;
   /** 横方向の重み（インパルス強度の係数） */
   HORIZONTAL_WEIGHT: number;
   /** 縦方向の重み（インパルス強度の係数） */
@@ -39,3 +41,18 @@ export interface EntityPullConfig {
   /** 引き寄せ時のサウンドピッチ */
   SOUND_PITCH: number;
 }
+
+/**
+ * パーティクルエフェクトに関する設定型
+ */
+export interface HookshotParticleConfig {
+  /** 軌道パーティクルのID */
+  TRAIL_PARTICLE: string;
+  /** 命中時パーティクルのID */
+  HIT_PARTICLE: string;
+  /** 軌道パーティクルの配置間隔（ブロック単位） */
+  STEP_DISTANCE: number;
+  /** 空振り時のパーティクル描画最大距離 */
+  MISS_DISTANCE: number;
+}
+

@@ -6,30 +6,34 @@ import { PlayerMovementConfig } from "./types";
  */
 export const PLAYER_MOVEMENT_CONFIG: PlayerMovementConfig = {
   /** 着弾可能な距離（ブロック単位） */
-  MAX_DISTANCE: 32,
+  MAX_DISTANCE: 150,
+  /** インパルスの最大勢い */
+  MAX_IMPULSE_DISTANCE: 80,
   /** 横方向の重み（横方向の距離に対して加えるインパルス強度の係数） */
-  HORIZONTAL_WEIGHT: 0.18,
+  HORIZONTAL_WEIGHT: 0.07,
   /** 縦方向の重み（縦方向の距離に対して加えるインパルス強度の係数） */
-  VERTICAL_WEIGHT: 0.16,
+  VERTICAL_WEIGHT: 0.12,
   /** 高さオフセット（着弾地点の何マス上を目標とするか） */
-  HEIGHT_OFFSET: 1.5,
+  HEIGHT_OFFSET: 8,
   /** 発射方向への影響の重み（垂直入力による横方向の偏向係数） */
-  STEERING_WEIGHT: 0.5,
+  STEERING_WEIGHT: 1.0,
   /** 発射距離減衰の重み（発射方向に対して下がる入力による減衰係数） */
-  DISTANCE_DAMPING_WEIGHT: 0.5,
+  DISTANCE_DAMPING_WEIGHT: 0.3,
   /** 発射距離増幅の重み（発射方向に向かう入力による増幅係数） */
-  DISTANCE_BOOST_WEIGHT: 0.5,
+  DISTANCE_BOOST_WEIGHT: 0.1,
 };
 
 /**
  * プレイヤーの移動入力ベクトルを取得（フォールバック付き）
+ * Bedrock API の getMovementVector は x: +1 (左) / -1 (右), y: +1 (前) / -1 (後) であるため、
+ * x を反転して x: +1 (右) / -1 (左), y: +1 (前) / -1 (後) に正規化します。
  */
 export function getPlayerMovementInput(player: Player): Vector2 {
   try {
     if (player.inputInfo) {
       const moveVec = player.inputInfo.getMovementVector();
       if (moveVec) {
-        return { x: moveVec.x, y: moveVec.y };
+        return { x: -moveVec.x, y: moveVec.y };
       }
     }
   } catch (e) {
@@ -101,14 +105,30 @@ export function applyPlayerMovementImpulse(
   const steerZ = perpInputZ * config.STEERING_WEIGHT * baseHorizImpulse;
 
   // 5. 最終インパルスベクトルの合成
-  const finalImpulse = {
-    x: deltaX * config.HORIZONTAL_WEIGHT * distanceScale + steerX,
-    y: deltaY * config.VERTICAL_WEIGHT * distanceScale,
-    z: deltaZ * config.HORIZONTAL_WEIGHT * distanceScale + steerZ,
-  };
+  let impulseX = deltaX * config.HORIZONTAL_WEIGHT * distanceScale + steerX;
+  let impulseY = deltaY * config.VERTICAL_WEIGHT * distanceScale;
+  let impulseZ = deltaZ * config.HORIZONTAL_WEIGHT * distanceScale + steerZ;
+
+  // 6. 最大インパルス制限（ブロック換算距離の上限）
+  // MAX_IMPULSE_DISTANCE（ブロック）分の勢いを最大値としてクランプ
+  if (config.MAX_IMPULSE_DISTANCE > 0) {
+    const maxImpulseSpeed =
+      config.MAX_IMPULSE_DISTANCE * config.HORIZONTAL_WEIGHT;
+    const currentSpeed = Math.hypot(impulseX, impulseY, impulseZ);
+    if (currentSpeed > maxImpulseSpeed && currentSpeed > 0.0001) {
+      const scale = maxImpulseSpeed / currentSpeed;
+      impulseX *= scale;
+      impulseY *= scale;
+      impulseZ *= scale;
+    }
+  }
 
   // プレイヤーにインパルスを適用
-  player.applyImpulse(finalImpulse);
+  player.applyImpulse({
+    x: impulseX,
+    y: impulseY,
+    z: impulseZ,
+  });
 
   // 発動音の再生
   player.playSound("item.trident.riptide_1", { pitch: 1.2, volume: 1.0 });

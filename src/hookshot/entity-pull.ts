@@ -6,9 +6,9 @@ import { EntityPullConfig } from "./types";
  */
 export const ENTITY_PULL_CONFIG: EntityPullConfig = {
   /** 横方向の引き寄せインパルス係数 */
-  HORIZONTAL_WEIGHT: 0.22,
+  HORIZONTAL_WEIGHT: 0.3,
   /** 縦方向の引き寄せインパルス（浮遊・持ち上げ成分） */
-  VERTICAL_LIFT: 0.35,
+  VERTICAL_LIFT: 0.2,
   /** 最大インパルス速度 */
   MAX_IMPULSE_SPEED: 2.5,
   /** プレイヤー手前で止めるためのオフセット距離（ブロック単位） */
