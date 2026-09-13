@@ -1,27 +1,5 @@
 import { Player, Entity, Vector3, Vector2 } from "@minecraft/server";
-import { PlayerMovementConfig } from "./types";
-
-/**
- * プレイヤー移動の内部設定
- */
-export const PLAYER_MOVEMENT_CONFIG: PlayerMovementConfig = {
-  /** 着弾可能な距離（ブロック単位） */
-  MAX_DISTANCE: 150,
-  /** インパルスの最大勢い */
-  MAX_IMPULSE_DISTANCE: 40,
-  /** 横方向の重み（横方向の距離に対して加えるインパルス強度の係数） */
-  HORIZONTAL_WEIGHT: 0.2,
-  /** 縦方向の重み（縦方向の距離に対して加えるインパルス強度の係数） */
-  VERTICAL_WEIGHT: 0.07,
-  /** 高さオフセット（着弾地点の何マス上を目標とするか） */
-  HEIGHT_OFFSET: 8,
-  /** プレイヤーの横入力による偏向加算インパルスの重み */
-  STEERING_WEIGHT: 0.9,
-  /** プレイヤーの後退入力による減速加算インパルスの重み */
-  DISTANCE_DAMPING_WEIGHT: 0.3,
-  /** プレイヤーの前進入力による加速加算インパルスの重み */
-  DISTANCE_BOOST_WEIGHT: 1.0,
-};
+import { PLAYER_MOVEMENT_CONFIG, PlayerMovementConfig } from "./config";
 
 /**
  * プレイヤーの移動入力ベクトルを取得（フォールバック付き）

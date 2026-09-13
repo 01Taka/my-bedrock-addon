@@ -6,20 +6,32 @@ import {
   Dimension,
 } from "@minecraft/server";
 import {
+  HOOKSHOT_ITEM_ID,
   PLAYER_MOVEMENT_CONFIG,
+  ENTITY_PULL_CONFIG,
+  HEAVY_ENTITY_TYPES,
+  EXCLUDED_ENTITY_TYPES,
+  HOOKSHOT_PARTICLE_CONFIG,
+  HOOKSHOT_BLAST_CONFIG,
+  HOOKSHOT_CONFIG,
+  PlayerMovementConfig,
+  EntityPullConfig,
+  HeavyEntityTypes,
+  ExcludedEntityTypes,
+  HookshotParticleConfig,
+  HookshotBlastConfig,
+  HookshotConfig,
+} from "./config";
+import {
   executePlayerMovementToBlock,
   executePlayerMovementToEntity,
 } from "./player-movement";
 import {
-  ENTITY_PULL_CONFIG,
-  HEAVY_ENTITY_TYPES,
   isHeavyEntity,
   isValidHookshotTarget,
   executeEntityPull,
 } from "./entity-pull";
 import {
-  HOOKSHOT_BLAST_CONFIG,
-  HOOKSHOT_ITEM_ID,
   isHoldingHookshot,
   isBlastJumpReady,
   resetBlastJump,
@@ -37,29 +49,23 @@ import {
   updateFallDamageImmunity,
 } from "./blast-jump";
 import { handleHookshotEntityHit } from "./combat";
-import { HookshotParticleConfig, HookshotBlastConfig } from "./types";
-
-/**
- * フックショットのパーティクル設定
- */
-export const HOOKSHOT_PARTICLE_CONFIG: HookshotParticleConfig = {
-  /** 軌道パーティクル（エンドロッド光線ビーム） */
-  TRAIL_PARTICLE: "minecraft:endrod",
-  /** 着弾地点パーティクル（エンドロッドの光エフェクト） */
-  HIT_PARTICLE: "minecraft:endrod",
-  /** 軌道パーティクルの配置間隔（0.25ブロック間隔で隙間のない直線ビームを形成） */
-  STEP_DISTANCE: 0.25,
-  /** 空振り時のパーティクル描画最大距離 */
-  MISS_DISTANCE: 30,
-};
 
 export {
+  HOOKSHOT_ITEM_ID,
   PLAYER_MOVEMENT_CONFIG,
   ENTITY_PULL_CONFIG,
   HEAVY_ENTITY_TYPES,
+  EXCLUDED_ENTITY_TYPES,
+  HOOKSHOT_PARTICLE_CONFIG,
   HOOKSHOT_BLAST_CONFIG,
-  HOOKSHOT_ITEM_ID,
+  HOOKSHOT_CONFIG,
+  PlayerMovementConfig,
+  EntityPullConfig,
+  HeavyEntityTypes,
+  ExcludedEntityTypes,
+  HookshotParticleConfig,
   HookshotBlastConfig,
+  HookshotConfig,
   isHoldingHookshot,
   isBlastJumpReady,
   resetBlastJump,
@@ -79,6 +85,8 @@ export {
   executePlayerMovementToBlock,
   executePlayerMovementToEntity,
   executeEntityPull,
+  isHeavyEntity,
+  isValidHookshotTarget,
 };
 
 /**

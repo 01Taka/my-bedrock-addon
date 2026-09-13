@@ -4,11 +4,8 @@ import {
   EntityDamageCause,
   Vector3,
 } from "@minecraft/server";
-import { HookshotBlastConfig } from "./types";
-import {
-  HOOKSHOT_BLAST_CONFIG,
-  isHoldingHookshot,
-} from "./blast-jump";
+import { HOOKSHOT_BLAST_CONFIG, HookshotBlastConfig } from "./config";
+import { isHoldingHookshot } from "./blast-jump";
 
 /**
  * フックショットを持った状態でのエンティティ攻撃ハンドラー

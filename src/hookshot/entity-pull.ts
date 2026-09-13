@@ -1,65 +1,11 @@
 import { Player, Entity, Vector3, system } from "@minecraft/server";
-import { EntityPullConfig } from "./types";
-import { HOOKSHOT_BLAST_CONFIG } from "./blast-jump";
-
-/**
- * モブ引き寄せの内部設定
- */
-export const ENTITY_PULL_CONFIG: EntityPullConfig = {
-  /** 横方向の引き寄せインパルス係数 */
-  HORIZONTAL_WEIGHT: 0.7,
-  /** Y座標差が閾値（2ブロック）以下のときの基本垂直インパルス（一定） */
-  BASE_VERTICAL_IMPULSE: 1.0,
-  /** 高低差に応じた垂直インパルス加算を開始するY座標差の閾値（ブロック単位） */
-  HEIGHT_DIFF_THRESHOLD: 0.0,
-  /** 高低差が閾値を超えた場合に加算する垂直インパルス係数（1ブロックあたり） */
-  HEIGHT_DIFF_VERTICAL_WEIGHT: 0.2,
-  /** 最大インパルス速度 */
-  MAX_IMPULSE_SPEED: 5.0,
-  /** プレイヤー手前で止めるためのオフセット距離（ブロック単位） */
-  STOP_OFFSET_DISTANCE: 1.0,
-  /** 引き寄せ時のサウンドID */
-  SOUND_ID: "item.trident.return",
-  /** サウンド音量 */
-  SOUND_VOLUME: 1.0,
-  /** サウンドピッチ */
-  SOUND_PITCH: 1.2,
-};
-
-/**
- * 引き寄せ不可（代わりにプレイヤーが接近する）大型モブ・ボスのリスト
- */
-export const HEAVY_ENTITY_TYPES: readonly string[] = [
-  "minecraft:iron_golem",
-  "minecraft:warden",
-  "minecraft:ender_dragon",
-  "minecraft:wither",
-  "minecraft:elder_guardian",
-  "minecraft:ravager",
-];
-
-/**
- * フックショットの対象から完全に除外するエンティティタイプ
- */
-export const EXCLUDED_ENTITY_TYPES: readonly string[] = [
-  "minecraft:item",
-  "minecraft:arrow",
-  "minecraft:xp_orb",
-  "minecraft:splash_potion",
-  "minecraft:lingering_potion",
-  "minecraft:egg",
-  "minecraft:snowball",
-  "minecraft:ender_pearl",
-  "minecraft:boat",
-  "minecraft:chest_boat",
-  "minecraft:minecart",
-  "minecraft:chest_minecart",
-  "minecraft:command_block_minecart",
-  "minecraft:furnace_minecart",
-  "minecraft:hopper_minecart",
-  "minecraft:tnt_minecart",
-  "minecraft:armor_stand",
-];
+import {
+  ENTITY_PULL_CONFIG,
+  HEAVY_ENTITY_TYPES,
+  EXCLUDED_ENTITY_TYPES,
+  HOOKSHOT_BLAST_CONFIG,
+  EntityPullConfig,
+} from "./config";
 
 /**
  * エンティティが大型モブ（プレイヤー接近対象）であるか判定

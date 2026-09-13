@@ -9,82 +9,12 @@ import {
   EntityDamageCause,
   system,
 } from "@minecraft/server";
-import { HookshotBlastConfig } from "./types";
+import {
+  HOOKSHOT_ITEM_ID,
+  HOOKSHOT_BLAST_CONFIG,
+  HookshotBlastConfig,
+} from "./config";
 import { getPlayerMovementInput } from "./player-movement";
-
-/** フックショットのアイテムID */
-export const HOOKSHOT_ITEM_ID = "addon:hookshot";
-
-/**
- * 爆風ジャンプおよび関連アクションの内部設定
- */
-export const HOOKSHOT_BLAST_CONFIG: HookshotBlastConfig = {
-  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 上方向インパルス強度 */
-  PRE_HOOK_UPWARD_IMPULSE: 0.8,
-  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
-  PRE_HOOK_DOWNWARD_INERTIA_RETENTION: 0.3,
-  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
-  PRE_HOOK_HORIZONTAL_INPUT_WEIGHT: 0.75,
-  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 最大速度制限 */
-  PRE_HOOK_MAX_IMPULSE_SPEED: 2.5,
-
-  /** フックショット着弾後の爆風ジャンプ: 上方向インパルス強度 */
-  POST_HOOK_UPWARD_IMPULSE: 1.0,
-  /** フックショット着弾後の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
-  POST_HOOK_DOWNWARD_INERTIA_RETENTION: 0.3,
-  /** フックショット着弾後の爆風ジャンプ: 水平慣性の維持率（0.0: 完全リセット, 1.0: 減衰なし, 0.6: 60%維持） */
-  /** フックショット着弾後の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
-  POST_HOOK_HORIZONTAL_INPUT_WEIGHT: 0.1,
-  /** フックショット着弾後の爆風ジャンプ: 最大速度制限 */
-  POST_HOOK_MAX_IMPULSE_SPEED: 3.0,
-
-  /** 前入力時の水平速度減衰率 */
-  FORWARD_HORIZONTAL_RETENTION: 0.8,
-  /** 入力なし時の水平速度減衰率 */
-  NEUTRAL_HORIZONTAL_RETENTION: 0.3,
-  /** 後ろ入力時に移動方向と反対方向に与える水平インパルス強度 */
-  BACKWARD_IMPULSE_FORCE: 0.6,
-  /** 静止状態での前入力時に与える水平推進インパルス強度 */
-  FORWARD_IMPULSE_FORCE: 0.5,
-  /** 平行入力判定のデッドゾーンしきい値（スティック誤差許容） */
-  PARALLEL_DEADZONE: 0.2,
-
-  /** 爆風パーティクルID（大爆発） */
-  PARTICLE_ID: "minecraft:huge_explosion_emitter",
-  /** 風爆発パーティクルID */
-  WIND_PARTICLE_ID: "minecraft:wind_explosion_emitter",
-  /** 煙爆発パーティクルID */
-  SMOKE_PARTICLE_ID: "minecraft:explosion_particle",
-  /** 爆風サウンドID */
-  SOUND_ID: "random.explode",
-  /** サウンド音量 */
-  SOUND_VOLUME: 1.0,
-  /** サウンドピッチ */
-  SOUND_PITCH: 1.2,
-  /** モブ引き寄せタグ名 */
-  PULLED_TAG: "hookshot:pulled",
-  /** モブ引き寄せタグの持続時間（tick単位: 20tick = 1秒） */
-  PULL_TAG_DURATION_TICKS: 20,
-  /** 引き寄せモブへの攻撃ダメージ（16 = 8ハート分） */
-  FINISHER_DAMAGE: 16,
-  /** 引き寄せモブへの視線方向ノックバック強度 */
-  FINISHER_KNOCKBACK_FORCE: 1.8,
-  /** 引き寄せモブへのフィニッシャー攻撃時の上方向ノックバック補正 */
-  FINISHER_VERTICAL_LIFT: 0.35,
-
-  /** 爆風ジャンプ後の落下ダメージ無効化時間（tick単位: 40tick = 2秒） */
-  FALL_DAMAGE_IMMUNITY_TICKS: 40,
-  /** 落下ダメージ無効化のカウントダウン開始Yオフセット（発動地点Y - この値 以下でカウントダウン開始。デフォルト: 3） */
-  IMMUNITY_TRIGGER_Y_OFFSET: 3,
-  /** 落下ダメージ無効化終了時の通知パーティクルID */
-  IMMUNITY_EXPIRE_PARTICLE: "minecraft:smoke_particle",
-  /** 落下ダメージ無効化終了時の通知サウンドID */
-  IMMUNITY_EXPIRE_SOUND: "random.break",
-  /** 落下ダメージ無効化終了時のサウンド音量 */
-  IMMUNITY_EXPIRE_SOUND_VOLUME: 0.8,
-  /** 落下ダメージ無効化終了時のサウンドピッチ */
-  IMMUNITY_EXPIRE_SOUND_PITCH: 1.5,
-};
 
 // プレイヤーごとの爆風ジャンプ可能状態（true: 使用可能 / false: 使用済み）
 const blastJumpStateMap = new Map<string, boolean>();
