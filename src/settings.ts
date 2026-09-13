@@ -13,6 +13,7 @@ export const SETTING_KEYS = {
   TORCH: "setting_torch",
   GRAVE: "setting_grave",
   GRAVE_OTHERS: "setting_grave_others",
+  AUTO_SNEAK: "setting_auto_sneak",
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -23,21 +24,33 @@ export interface PlayerSettings {
   torch: boolean;
   grave: boolean;
   graveOthers: boolean;
+  autoSneak: boolean;
 }
 
 /**
  * プレイヤーの特定の設定値を取得（未設定時はデフォルト true）
  */
-export function isSettingEnabled(player: Player, key: SettingKey): boolean {
+export function isSettingEnabled(
+  player: Player,
+  key: SettingKey,
+  defaultValue: boolean = true,
+): boolean {
   try {
     const val = player.getDynamicProperty(key);
     if (typeof val === "boolean") {
       return val;
     }
   } catch (e) {
-    // 取得失敗時はデフォルトON
+    // 取得失敗時はデフォルト値
   }
-  return true;
+  return defaultValue;
+}
+
+/**
+ * プレイヤーのフックショット常時スニーク（常時巻取り）設定を取得（未設定時はデフォルト false）
+ */
+export function isAutoSneakEnabled(player: Player): boolean {
+  return isSettingEnabled(player, SETTING_KEYS.AUTO_SNEAK, false);
 }
 
 /**
@@ -65,6 +78,7 @@ export function getPlayerSettings(player: Player): PlayerSettings {
     torch: isSettingEnabled(player, SETTING_KEYS.TORCH),
     grave: isSettingEnabled(player, SETTING_KEYS.GRAVE),
     graveOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
+    autoSneak: isAutoSneakEnabled(player),
   };
 }
 
@@ -85,26 +99,37 @@ export function showSettingsForm(player: Player): void {
   form.toggle("他人の墓の回収 (他人の墓石を開ける)", {
     defaultValue: current.graveOthers,
   });
+  form.toggle("フックショット常時巻取り (Switch等の操作補助)", {
+    defaultValue: current.autoSneak,
+  });
 
   form
     .show(player)
     .then((response) => {
       if (response.canceled || !response.formValues) return;
 
-      const [treeVal, oreVal, torchVal, graveVal, graveOthersVal] =
-        response.formValues as [
-          boolean,
-          boolean,
-          boolean,
-          boolean,
-          boolean,
-        ];
+      const [
+        treeVal,
+        oreVal,
+        torchVal,
+        graveVal,
+        graveOthersVal,
+        autoSneakVal,
+      ] = response.formValues as [
+        boolean,
+        boolean,
+        boolean,
+        boolean,
+        boolean,
+        boolean,
+      ];
 
       setSettingEnabled(player, SETTING_KEYS.TREE, treeVal);
       setSettingEnabled(player, SETTING_KEYS.ORE, oreVal);
       setSettingEnabled(player, SETTING_KEYS.TORCH, torchVal);
       setSettingEnabled(player, SETTING_KEYS.GRAVE, graveVal);
       setSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS, graveOthersVal);
+      setSettingEnabled(player, SETTING_KEYS.AUTO_SNEAK, autoSneakVal);
       world.gameRules.keepInventory = graveVal;
 
       const statusText = (val: boolean) => (val ? "§a[ON]§r" : "§c[OFF]§r");
@@ -117,6 +142,7 @@ export function showSettingsForm(player: Player): void {
           `・オフハンドたいまつ: ${statusText(torchVal)}\n` +
           `・墓機能: ${statusText(graveVal)}\n` +
           `・他人の墓の回収: ${statusText(graveOthersVal)}\n` +
+          `・フックショット常時巻取り: ${statusText(autoSneakVal)}\n` +
           `§a============================`,
       );
     })
@@ -126,79 +152,191 @@ export function showSettingsForm(player: Player): void {
 }
 
 /**
- * /scriptevent addon:<command> による設定変更・UI表示ハンドラー
+ * /scriptevent による設定変更・UI表示ハンドラー
+ * 対応形式:
+ * - /scriptevent addon:autosneak
+ * - /scriptevent addon autosneak
+ * - /scriptevent addon:menu
+ * - /scriptevent addon menu
  */
 export function handleSettingsScriptEvent(
   event: ScriptEventCommandMessageAfterEvent,
 ): void {
-  const source = event.sourceEntity;
-  if (!(source instanceof Player)) return;
+  // プレイヤーの特定（sourceEntityが取れない環境へのフォールバック）
+  let player: Player | undefined;
+  if (event.sourceEntity instanceof Player) {
+    player = event.sourceEntity;
+  } else {
+    const allPlayers = world.getAllPlayers();
+    if (allPlayers.length === 1) {
+      player = allPlayers[0];
+    }
+  }
 
-  const player = source;
-  const id = event.id.toLowerCase();
+  const rawId = event.id.trim().toLowerCase();
+  const rawMsg = (event.message || "").trim().toLowerCase();
 
-  switch (id) {
-    case "addon:menu":
-    case "addon:setting":
-    case "addon:settings":
-    case "addon:config": {
+  // コマンド名と引数の抽出
+  let cmd = "";
+  let arg = "";
+
+  if (rawId.startsWith("addon:")) {
+    cmd = rawId.substring(6);
+    arg = rawMsg;
+  } else if (rawId === "addon") {
+    const parts = rawMsg.split(/\s+/);
+    cmd = parts[0] || "";
+    arg = parts.slice(1).join(" ");
+  } else if (
+    rawId === "autosneak" ||
+    rawId === "auto_sneak" ||
+    rawId === "menu" ||
+    rawId === "setting" ||
+    rawId === "settings" ||
+    rawId === "config" ||
+    rawId === "status" ||
+    rawId === "help"
+  ) {
+    cmd = rawId;
+    arg = rawMsg;
+  } else {
+    return;
+  }
+
+  // プレイヤーがまだ未確定の場合、引数からプレイヤー名を探すか全プレイヤーから探す
+  if (!player) {
+    if (arg) {
+      const targetName = arg.split(/\s+/)[0];
+      player = world
+        .getAllPlayers()
+        .find((p) => p.name.toLowerCase() === targetName.toLowerCase());
+    }
+    if (!player) {
+      const all = world.getAllPlayers();
+      if (all.length > 0) player = all[0];
+    }
+  }
+
+  if (!player) return;
+
+  const targetPlayer = player;
+
+  switch (cmd) {
+    case "menu":
+    case "setting":
+    case "settings":
+    case "config":
+    case "ui": {
       system.run(() => {
-        showSettingsForm(player);
+        showSettingsForm(targetPlayer);
       });
       break;
     }
 
-    case "addon:tree": {
-      const next = !isSettingEnabled(player, SETTING_KEYS.TREE);
-      setSettingEnabled(player, SETTING_KEYS.TREE, next);
-      player.sendMessage(
+    case "tree": {
+      let next: boolean;
+      if (arg === "on" || arg === "true" || arg === "1") next = true;
+      else if (arg === "off" || arg === "false" || arg === "0") next = false;
+      else next = !isSettingEnabled(targetPlayer, SETTING_KEYS.TREE);
+
+      setSettingEnabled(targetPlayer, SETTING_KEYS.TREE, next);
+      try {
+        targetPlayer.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
+      } catch {}
+      targetPlayer.sendMessage(
         `§6[設定] 木の破壊 (一括伐採) を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
       );
       break;
     }
 
-    case "addon:ore": {
-      const next = !isSettingEnabled(player, SETTING_KEYS.ORE);
-      setSettingEnabled(player, SETTING_KEYS.ORE, next);
-      player.sendMessage(
+    case "ore": {
+      let next: boolean;
+      if (arg === "on" || arg === "true" || arg === "1") next = true;
+      else if (arg === "off" || arg === "false" || arg === "0") next = false;
+      else next = !isSettingEnabled(targetPlayer, SETTING_KEYS.ORE);
+
+      setSettingEnabled(targetPlayer, SETTING_KEYS.ORE, next);
+      try {
+        targetPlayer.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
+      } catch {}
+      targetPlayer.sendMessage(
         `§6[設定] 鉱石の破壊 (一括採掘) を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
       );
       break;
     }
 
-    case "addon:torch": {
-      const next = !isSettingEnabled(player, SETTING_KEYS.TORCH);
-      setSettingEnabled(player, SETTING_KEYS.TORCH, next);
-      player.sendMessage(
+    case "torch": {
+      let next: boolean;
+      if (arg === "on" || arg === "true" || arg === "1") next = true;
+      else if (arg === "off" || arg === "false" || arg === "0") next = false;
+      else next = !isSettingEnabled(targetPlayer, SETTING_KEYS.TORCH);
+
+      setSettingEnabled(targetPlayer, SETTING_KEYS.TORCH, next);
+      try {
+        targetPlayer.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
+      } catch {}
+      targetPlayer.sendMessage(
         `§6[設定] オフハンドたいまつ を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
       );
       break;
     }
 
-    case "addon:grave": {
-      const next = !isSettingEnabled(player, SETTING_KEYS.GRAVE);
-      setSettingEnabled(player, SETTING_KEYS.GRAVE, next);
+    case "grave": {
+      let next: boolean;
+      if (arg === "on" || arg === "true" || arg === "1") next = true;
+      else if (arg === "off" || arg === "false" || arg === "0") next = false;
+      else next = !isSettingEnabled(targetPlayer, SETTING_KEYS.GRAVE);
+
+      setSettingEnabled(targetPlayer, SETTING_KEYS.GRAVE, next);
       world.gameRules.keepInventory = next;
-      player.sendMessage(
+      try {
+        targetPlayer.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
+      } catch {}
+      targetPlayer.sendMessage(
         `§6[設定] 墓機能 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
       );
       break;
     }
 
-    case "addon:grave_others":
-    case "addon:graveothers": {
-      const next = !isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS);
-      setSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS, next);
-      player.sendMessage(
+    case "grave_others":
+    case "graveothers": {
+      let next: boolean;
+      if (arg === "on" || arg === "true" || arg === "1") next = true;
+      else if (arg === "off" || arg === "false" || arg === "0") next = false;
+      else next = !isSettingEnabled(targetPlayer, SETTING_KEYS.GRAVE_OTHERS);
+
+      setSettingEnabled(targetPlayer, SETTING_KEYS.GRAVE_OTHERS, next);
+      try {
+        targetPlayer.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
+      } catch {}
+      targetPlayer.sendMessage(
         `§6[設定] 他人の墓の回収 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
       );
       break;
     }
 
-    case "addon:status": {
-      const settings = getPlayerSettings(player);
+    case "autosneak":
+    case "auto_sneak":
+    case "sneak": {
+      let next: boolean;
+      if (arg === "on" || arg === "true" || arg === "1") next = true;
+      else if (arg === "off" || arg === "false" || arg === "0") next = false;
+      else next = !isAutoSneakEnabled(targetPlayer);
+
+      setSettingEnabled(targetPlayer, SETTING_KEYS.AUTO_SNEAK, next);
+      try {
+        targetPlayer.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
+      } catch {}
+      targetPlayer.sendMessage(
+        `§6[設定] フックショット常時巻取り を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+      );
+      break;
+    }
+
+    case "status": {
+      const settings = getPlayerSettings(targetPlayer);
       const statusText = (val: boolean) => (val ? "§a[ON]§r" : "§c[OFF]§r");
-      player.sendMessage(
+      targetPlayer.sendMessage(
         `§a============================\n` +
           `§6【現在の機能設定】\n` +
           `§f・木の破壊: ${statusText(settings.tree)}\n` +
@@ -206,14 +344,15 @@ export function handleSettingsScriptEvent(
           `・オフハンドたいまつ: ${statusText(settings.torch)}\n` +
           `・墓機能: ${statusText(settings.grave)}\n` +
           `・他人の墓の回収: ${statusText(settings.graveOthers)}\n` +
+          `・フックショット常時巻取り: ${statusText(settings.autoSneak)}\n` +
           `§7(/scriptevent addon:menu で設定画面を開く)\n` +
           `§a============================`,
       );
       break;
     }
 
-    case "addon:help": {
-      player.sendMessage(
+    case "help": {
+      targetPlayer.sendMessage(
         `§a============================\n` +
           `§6【アドオンコマンド一覧】\n` +
           `§f・/scriptevent addon:menu : 設定画面を開く\n` +
@@ -222,7 +361,9 @@ export function handleSettingsScriptEvent(
           `・/scriptevent addon:torch : オフハンドたいまつのON/OFF切り替え\n` +
           `・/scriptevent addon:grave : 墓機能のON/OFF切り替え\n` +
           `・/scriptevent addon:grave_others : 他人の墓の回収のON/OFF切り替え\n` +
+          `・/scriptevent addon:autosneak : フックショット常時巻取りのON/OFF切り替え\n` +
           `・/scriptevent addon:status : 現在の設定状態を確認\n` +
+          `§7※ /scriptevent addon autosneak のようにスペース区切りでも動作します。\n` +
           `§7※ スニーク中に棒(Stick)または時計(Clock)を使用して設定画面を開くこともできます。\n` +
           `§a============================`,
       );

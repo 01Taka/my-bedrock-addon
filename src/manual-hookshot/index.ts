@@ -9,12 +9,17 @@ import {
   EquipmentSlot,
 } from "@minecraft/server";
 import { MANUAL_HOOKSHOT_CONFIG } from "./config";
+import { isAutoSneakEnabled } from "../settings";
 
 /**
  * プレイヤーが物理的にスニーク（シフト）キーを押下しているかを判定
- * （低所・匍匐時の強制スニークによる誤動作を防止）
+ * （低所・匍匐時の強制スニークによる誤動作を防止、Switch向け常時シフト設定対応）
  */
 function isSneakButtonPressed(player: Player): boolean {
+  // 常時シフト判定設定がONの場合は常にtrue
+  if (isAutoSneakEnabled(player)) {
+    return true;
+  }
   try {
     if (player.inputInfo) {
       return (
@@ -27,18 +32,20 @@ function isSneakButtonPressed(player: Player): boolean {
 }
 
 /**
- * プレイヤーごとのフック状態（即時着弾のため着弾座標とスニークカウンタのみ保持）
+ * プレイヤーごとのフック状態（即時着弾のため着弾座標とスニークカウンタ、着弾後経過tickを保持）
  */
 interface PlayerHookState {
   hitPos: Vector3;
   sneakTickCounter: number;
+  /** フック着弾時からの経過tick数（ピルチャージ用） */
+  chargeTicks: number;
 }
 
 /** プレイヤーIDをキーにしたフック状態マップ */
 const playerHooks = new Map<string, PlayerHookState>();
 
-/** プレイヤーIDをキーにした爆風クールダウン終了予定tickマップ */
-const blastCooldownMap = new Map<string, number>();
+/** プレイヤーIDをキーにした前回巻き取り開始時爆風エフェクト発生tickマップ */
+const lastWindStartEffectTickMap = new Map<string, number>();
 
 /**
  * プレイヤーがマニュアルフックショットを所持（メインハンドまたはオフハンド）しているか判定
@@ -57,58 +64,63 @@ export function isHoldingManualHookshot(player: Player): boolean {
 }
 
 /**
- * 爆風が使用可能か判定（クールダウン中かどうかのチェック）
+ * プレイヤーの現在チャージされているピル数を取得（0〜3）
  */
-export function isManualHookshotBlastReady(player: Player): boolean {
-  if (!MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_ON_WIND_START) {
-    return false;
-  }
-  const expireTick = blastCooldownMap.get(player.id) ?? 0;
-  return system.currentTick >= expireTick;
-}
-
-/**
- * 爆風クールダウンの残りtick数を取得（0以上の数値）
- */
-export function getBlastCooldownRemainingTicks(player: Player): number {
-  const expireTick = blastCooldownMap.get(player.id) ?? 0;
-  return Math.max(0, expireTick - system.currentTick);
-}
-
-/**
- * 巻き取り開始時の爆風クールダウンを開始
- */
-export function startManualHookshotBlastCooldown(player: Player): void {
-  blastCooldownMap.set(
-    player.id,
-    system.currentTick + MANUAL_HOOKSHOT_CONFIG.BLAST_COOLDOWN_TICKS,
+export function getChargedPillCount(player: Player): number {
+  const hook = playerHooks.get(player.id);
+  if (!hook) return 0;
+  return Math.min(
+    MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT,
+    Math.floor(
+      hook.chargeTicks / MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_TICKS_PER_PILL,
+    ),
   );
 }
 
 /**
- * アクションバーに爆風が起こせるかどうかを示すテキストなしピルUIを表示
+ * 解除時の爆風＆インパルスが発動可能か（3つのピルが満タンか）判定
+ */
+export function isReleaseBlastReady(player: Player): boolean {
+  return getChargedPillCount(player) >= MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
+}
+
+/**
+ * アクションバーにピルの蓄積状況を示すテキストなしピルUIを表示
  */
 export function updateManualHookshotHud(player: Player): void {
   if (!player.isValid) return;
-  if (!MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_ON_WIND_START) return;
 
   if (isHoldingManualHookshot(player) || playerHooks.has(player.id)) {
-    const ready = isManualHookshotBlastReady(player);
-    if (ready) {
-      // 爆風使用可能: 緑色のピル（3セグメント）
-      player.onScreenDisplay.setActionBar("§a(▰▰▰)");
+    const pills = getChargedPillCount(player);
+    const maxPills = MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
+    // 着地中で実際には爆発とインパルスが発生しない場合はグレーっぽい薄緑(§2)、空中で発動可能な場合は鮮やかな緑(§a)
+    const activeColor = player.isOnGround ? "§2" : "§a";
+
+    // 射程内で壁に着弾可能か判定
+    let canHitWall = false;
+    try {
+      const blockHit = player.getBlockFromViewDirection({
+        maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+        includePassableBlocks: false,
+        includeLiquidBlocks: false,
+      });
+      canHitWall = blockHit !== undefined;
+    } catch {}
+
+    // 空ピルの色: 射程内で壁に当たる時は明るい灰色(§7)、射程外や壁がない時は暗灰色(§8)
+    const emptyColor = canHitWall ? "§7" : "§8";
+
+    if (pills >= maxPills) {
+      // 3つ満タン（着地中はグレーっぽい薄緑、空中で発動可能な場合は鮮やかな緑）
+      player.onScreenDisplay.setActionBar(`${activeColor}(▰▰▰)`);
+    } else if (pills === 0) {
+      // 0個（未着弾または着弾直後）: 射程内で壁に当たる時は明るい空ピル、射程外は暗灰色の空ピル
+      player.onScreenDisplay.setActionBar(`${emptyColor}(▰▰▰)`);
     } else {
-      // クールダウン中: リチャージ進行度を表すピルゲージ（3セグメント・テキストなし）
-      const remaining = getBlastCooldownRemainingTicks(player);
-      const total = MANUAL_HOOKSHOT_CONFIG.BLAST_COOLDOWN_TICKS;
-      const totalSegments = 3;
-      const progress = Math.max(0, Math.min(1, 1 - remaining / total));
-      const filled = Math.min(
-        totalSegments,
-        Math.floor(progress * totalSegments),
-      );
-      const empty = totalSegments - filled;
-      const pillBar = "§a" + "▰".repeat(filled) + "§8" + "▰".repeat(empty);
+      // 1〜2個: 蓄積数に応じて表現（着地中はグレーっぽい薄緑、空中は鮮やかな緑、空きピルは射程判定を反映）
+      const filled = pills;
+      const empty = maxPills - filled;
+      const pillBar = activeColor + "▰".repeat(filled) + emptyColor + "▰".repeat(empty);
       player.onScreenDisplay.setActionBar(`§7(${pillBar}§7)`);
     }
   }
@@ -125,14 +137,21 @@ export function resetHook(
   notify: boolean = true,
   isManualRelease: boolean = false,
 ): void {
-  if (!playerHooks.has(player.id)) return;
+  const hook = playerHooks.get(player.id);
+  if (!hook) return;
+
+  // 解除前のピル蓄積状態（ピルが3つ満タンか）を確認
+  const canReleaseBlast =
+    Math.floor(
+      hook.chargeTicks / MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_TICKS_PER_PILL,
+    ) >= MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
+
   playerHooks.delete(player.id);
 
-  // 手動解除かつ空中にいる場合のみ、小爆発エフェクトとホップインパルスを適用（地上では静かに解除）
+  // 手動解除かつ空中にいる場合のみ判定
   if (isManualRelease && !player.isOnGround) {
-    // 爆風が起こせる状態（クールダウン中でない）の場合のみ、終了時の爆風とインパクト（ホップ・低速落下）が発生
-    const canBlast = isManualHookshotBlastReady(player);
-    if (canBlast) {
+    if (canReleaseBlast) {
+      // ピルが3つ満タンの場合のみ、小爆発エフェクトとホップインパルスを適用
       try {
         const feetPos = {
           x: player.location.x,
@@ -173,24 +192,16 @@ export function resetHook(
           );
         }
       } catch {}
-
-      player.sendMessage("§e[Hookshot] フックを解除しました！（ホップ）");
-
-      // 巻き取り終了時の爆発でもメーターを消費
-      startManualHookshotBlastCooldown(player);
-      updateManualHookshotHud(player);
     } else {
-      // クールダウン中は爆風とインパクトなしで解除
+      // 3つ溜まっていない場合は爆風・インパルスなしで静かに解除
       try {
         player.playSound("random.pop", { pitch: 1.2, volume: 0.8 });
       } catch {}
-      player.sendMessage("§e[Hookshot] フックを解除しました。");
     }
   } else if (notify) {
     try {
       player.playSound("random.pop", { pitch: 1.2, volume: 0.8 });
     } catch {}
-    player.sendMessage("§e[Hookshot] フックを解除しました。状態をリセットしました。");
   }
 }
 
@@ -228,7 +239,6 @@ export function handleManualHookshotUse(
       try {
         player.playSound("note.bass", { pitch: 0.6, volume: 0.8 });
       } catch {}
-      player.sendMessage("§c[Hookshot] 射程内にブロックがありませんでした。");
       return;
     }
 
@@ -249,17 +259,13 @@ export function handleManualHookshotUse(
     playerHooks.set(player.id, {
       hitPos,
       sneakTickCounter: 0,
+      chargeTicks: 0,
     });
 
     try {
       player.dimension.spawnParticle(MANUAL_HOOKSHOT_CONFIG.HIT_PARTICLE, hitPos);
       player.playSound("item.trident.hit", { pitch: 1.2, volume: 1.0 });
     } catch {}
-
-    player.sendMessage(
-      `§a[Hookshot] フックが即時着弾しました！ 座標: (${hitPos.x.toFixed(1)}, ${hitPos.y.toFixed(1)}, ${hitPos.z.toFixed(1)})`,
-    );
-    player.sendMessage("§e[Hookshot] シフト（スニーク）している間、着弾点に向かって巻き取ります。");
   });
 }
 
@@ -277,6 +283,10 @@ export function updateManualHookshots(): void {
     const dimension = player.dimension;
     const hitPos = hook.hitPos;
     const headPos = player.getHeadLocation();
+
+    // 着弾後の経過tickをカウント（ピルチャージ用）
+    hook.chargeTicks++;
+
     // プレイヤーの視界を遮らないよう、目の高さ直下ではなく手元・胸元の位置から伸ばす
     const playerPos: Vector3 = {
       x: headPos.x,
@@ -316,17 +326,23 @@ export function updateManualHookshots(): void {
         vel = player.getVelocity();
       } catch {}
 
-      // 巻き取り開始の瞬間（sneakTickCounter === 0）に下方向の落下速度が規定値以上ならリセット＆爆発エフェクト
+      // 巻き取り開始の瞬間（sneakTickCounter === 0）に下方向の落下速度が規定値以上ならリセット＆爆発エフェクト（ピルとは完全分離）
       const downwardSpeed = -vel.y;
       if (
         hook.sneakTickCounter === 0 &&
         MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_ON_WIND_START &&
         downwardSpeed >= MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_THRESHOLD
       ) {
-        // クールダウン中でなく、爆風が起こせる場合のみ発動（エフェクト、低速落下、y速度リセット）
-        if (isManualHookshotBlastReady(player)) {
-          try {
-            player.applyImpulse({ x: 0, y: -vel.y, z: 0 });
+        try {
+          player.applyImpulse({ x: 0, y: -vel.y, z: 0 });
+
+          // 爆風エフェクトと音のインターバル判定（約1秒間は再度エフェクト・サウンドを出さない）
+          const lastEffectTick = lastWindStartEffectTickMap.get(player.id) ?? -9999;
+          if (
+            system.currentTick - lastEffectTick >=
+            MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_INTERVAL_TICKS
+          ) {
+            lastWindStartEffectTickMap.set(player.id, system.currentTick);
 
             // 爆発エフェクトとサウンドの発生
             const feetPos = {
@@ -346,23 +362,20 @@ export function updateManualHookshots(): void {
               pitch: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_PITCH,
               volume: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_VOLUME,
             });
+          }
 
-            // リセット直後に短い低速落下の効果を与えて落下ダメージをリセット（パーティクル非表示）
-            if (MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET > 0) {
-              player.addEffect(
-                "slow_falling",
-                MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET,
-                {
-                  showParticles: false,
-                },
-              );
-            }
-          } catch {}
-          vel.y = 0;
-
-          // 巻き取り開始時の爆風クールダウンを開始
-          startManualHookshotBlastCooldown(player);
-        }
+          // リセット直後に短い低速落下の効果を与えて落下ダメージをリセット（パーティクル非表示）
+          if (MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET > 0) {
+            player.addEffect(
+              "slow_falling",
+              MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET,
+              {
+                showParticles: false,
+              },
+            );
+          }
+        } catch {}
+        vel.y = 0;
       }
 
       if (distance > MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE) {
@@ -405,19 +418,10 @@ export function updateManualHookshots(): void {
           } catch {}
         }
 
-        // デバッグ用 sendMessage (開始時 + 20tick/1秒ごとに通知)
         hook.sneakTickCounter++;
-        if (hook.sneakTickCounter === 1 || hook.sneakTickCounter % 20 === 0) {
-          player.sendMessage(
-            `§b[Hookshot] 巻き取り中... 残り距離: ${distance.toFixed(1)}m | 速度: ${speedAlongTarget.toFixed(2)} b/t`,
-          );
-        }
       } else {
         // 到達判定
         hook.sneakTickCounter++;
-        if (hook.sneakTickCounter === 1 || hook.sneakTickCounter % 20 === 0) {
-          player.sendMessage("§a[Hookshot] 目標地点に到達しました。");
-        }
       }
     } else {
       // シフトを離している時はカウンタをリセット
@@ -445,14 +449,14 @@ export function initManualHookshot(): void {
     }
   }, 1);
 
-  // プレイヤー死亡時にフック状態およびクールダウンをリセット
+  // プレイヤー死亡時にフック状態およびエフェクトタイマーをリセット
   world.afterEvents.entityDie.subscribe((event) => {
     const dead = event.deadEntity;
     if (dead instanceof Player) {
       if (playerHooks.has(dead.id)) {
         resetHook(dead, false);
       }
-      blastCooldownMap.delete(dead.id);
+      lastWindStartEffectTickMap.delete(dead.id);
     }
   });
 }
