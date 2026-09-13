@@ -14,11 +14,11 @@ export interface PlayerMovementConfig {
   VERTICAL_WEIGHT: number;
   /** 着弾地点の高さオフセット */
   HEIGHT_OFFSET: number;
-  /** プレイヤーの横入力による偏向の重み */
+  /** プレイヤーの横入力による偏向加算インパルスの重み */
   STEERING_WEIGHT: number;
-  /** プレイヤーの後退入力による減衰の重み */
+  /** プレイヤーの後退入力による減速加算インパルスの重み */
   DISTANCE_DAMPING_WEIGHT: number;
-  /** プレイヤーの前進入力による増幅の重み */
+  /** プレイヤーの前進入力による加速加算インパルスの重み */
   DISTANCE_BOOST_WEIGHT: number;
 }
 
@@ -28,10 +28,12 @@ export interface PlayerMovementConfig {
 export interface EntityPullConfig {
   /** 横方向の引き寄せインパルス係数 */
   HORIZONTAL_WEIGHT: number;
-  /** 縦方向の引き寄せインパルス（打ち上げ/浮遊成分） */
-  VERTICAL_LIFT: number;
-  /** Y軸方向の最低インパルス強度 */
-  MIN_VERTICAL_IMPULSE: number;
+  /** Y座標差が閾値（2ブロック）以下のときの基本垂直インパルス（一定値） */
+  BASE_VERTICAL_IMPULSE: number;
+  /** 高低差に応じた垂直インパルス加算を開始するY座標差の閾値（ブロック単位） */
+  HEIGHT_DIFF_THRESHOLD: number;
+  /** 高低差が閾値を超えた場合に加算する垂直インパルス係数（1ブロックあたり） */
+  HEIGHT_DIFF_VERTICAL_WEIGHT: number;
   /** 最大インパルス強度（過度な吹っ飛び防止） */
   MAX_IMPULSE_SPEED: number;
   /** プレイヤー手前で止めるためのオフセット距離（ブロック単位） */
@@ -48,7 +50,7 @@ export interface EntityPullConfig {
  * パーティクルエフェクトに関する設定型
  */
 export interface HookshotParticleConfig {
-  /** 軌道パーティクルのID */
+  /** 軌道パーティクルのID（エンドロッド光線ビーム） */
   TRAIL_PARTICLE: string;
   /** 命中時パーティクルのID */
   HIT_PARTICLE: string;
@@ -84,8 +86,23 @@ export interface HookshotBlastConfig {
   /** フックショット着弾後の爆風ジャンプ: 最大速度制限 */
   POST_HOOK_MAX_IMPULSE_SPEED: number;
 
-  /** 爆風パーティクルID */
+  /** 前入力時の水平速度減衰率（0.60 = 60%に減衰） */
+  FORWARD_HORIZONTAL_RETENTION: number;
+  /** 入力なし時の水平速度減衰率（0.15 = 15%に減衰） */
+  NEUTRAL_HORIZONTAL_RETENTION: number;
+  /** 後ろ入力時に移動方向と反対方向に与える水平インパルス強度 */
+  BACKWARD_IMPULSE_FORCE: number;
+  /** 静止状態での前入力時に与える水平推進インパルス強度 */
+  FORWARD_IMPULSE_FORCE: number;
+  /** 平行入力判定のデッドゾーンしきい値（スティック誤差許容） */
+  PARALLEL_DEADZONE: number;
+
+  /** 爆風パーティクルID（大爆発） */
   PARTICLE_ID: string;
+  /** 風爆発パーティクルID */
+  WIND_PARTICLE_ID?: string;
+  /** 煙爆発パーティクルID */
+  SMOKE_PARTICLE_ID?: string;
   /** 爆風サウンドID */
   SOUND_ID: string;
   /** 爆風サウンド音量 */
@@ -102,9 +119,17 @@ export interface HookshotBlastConfig {
   FINISHER_KNOCKBACK_FORCE: number;
   /** 引き寄せモブへのフィニッシャー攻撃時の上方向ノックバック補正 */
   FINISHER_VERTICAL_LIFT: number;
-  /** 爆風ジャンプ地点を基準にした落下ダメージの無効化・軽減機能（ウィンドチャージ仕様） */
-  RESET_FALL_DAMAGE_HEIGHT: boolean;
-  /** 落下ダメージを受けない安全落下距離（ブロック数・バニラ基準: 3） */
-  SAFE_FALL_DISTANCE: number;
+  /** 爆風ジャンプ発動地点からのYオフセット以下に到達してからの落下ダメージ無効化時間（tick単位: 40tick = 2秒） */
+  FALL_DAMAGE_IMMUNITY_TICKS: number;
+  /** 落下ダメージ無効化のカウントダウン開始Yオフセット（発動地点Y - この値 以下でカウントダウン開始。デフォルト: 3） */
+  IMMUNITY_TRIGGER_Y_OFFSET: number;
+  /** 落下ダメージ無効化終了時の通知パーティクルID */
+  IMMUNITY_EXPIRE_PARTICLE: string;
+  /** 落下ダメージ無効化終了時の通知サウンドID */
+  IMMUNITY_EXPIRE_SOUND: string;
+  /** 落下ダメージ無効化終了時のサウンド音量 */
+  IMMUNITY_EXPIRE_SOUND_VOLUME: number;
+  /** 落下ダメージ無効化終了時のサウンドピッチ */
+  IMMUNITY_EXPIRE_SOUND_PITCH: number;
 }
 

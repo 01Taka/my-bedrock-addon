@@ -30,7 +30,11 @@ import {
   setJumpButtonReleasedInAir,
   setHookshotLandedInAir,
   handlePlayerGroundTouch,
-  handleBlastJumpFallDamage,
+  handleBlastJumpDamage,
+  isFallDamageImmune,
+  startFallDamageImmunity,
+  clearFallDamageImmunity,
+  updateFallDamageImmunity,
 } from "./blast-jump";
 import { handleHookshotEntityHit } from "./combat";
 import { HookshotParticleConfig, HookshotBlastConfig } from "./types";
@@ -39,12 +43,12 @@ import { HookshotParticleConfig, HookshotBlastConfig } from "./types";
  * フックショットのパーティクル設定
  */
 export const HOOKSHOT_PARTICLE_CONFIG: HookshotParticleConfig = {
-  /** 軌道パーティクル（クリティカルの星エフェクト） */
-  TRAIL_PARTICLE: "minecraft:crit",
+  /** 軌道パーティクル（エンドロッド光線ビーム） */
+  TRAIL_PARTICLE: "minecraft:endrod",
   /** 着弾地点パーティクル（エンドロッドの光エフェクト） */
   HIT_PARTICLE: "minecraft:endrod",
-  /** 軌道パーティクルの配置間隔（ブロック単位） */
-  STEP_DISTANCE: 0.5,
+  /** 軌道パーティクルの配置間隔（0.25ブロック間隔で隙間のない直線ビームを形成） */
+  STEP_DISTANCE: 0.25,
   /** 空振り時のパーティクル描画最大距離 */
   MISS_DISTANCE: 30,
 };
@@ -66,15 +70,19 @@ export {
   setJumpButtonReleasedInAir,
   setHookshotLandedInAir,
   handlePlayerGroundTouch,
-  handleBlastJumpFallDamage,
   handleHookshotEntityHit,
+  handleBlastJumpDamage,
+  isFallDamageImmune,
+  startFallDamageImmunity,
+  clearFallDamageImmunity,
+  updateFallDamageImmunity,
   executePlayerMovementToBlock,
   executePlayerMovementToEntity,
   executeEntityPull,
 };
 
 /**
- * 2点間にパーティクルを直線状にスポーンして射出軌跡を描画
+ * 2点間にパーティクルを高密度に直線状にスポーンしてビーム状の射出軌跡を描画
  */
 export function spawnHookshotTrail(
   dimension: Dimension,
@@ -94,11 +102,16 @@ export function spawnHookshotTrail(
   const stepZ = dz / count;
 
   for (let i = 0; i <= count; i++) {
+    const px = start.x + stepX * i;
+    const py = start.y + stepY * i;
+    const pz = start.z + stepZ * i;
+
     try {
+      // エンドロッドの白いビーム光
       dimension.spawnParticle(config.TRAIL_PARTICLE, {
-        x: start.x + stepX * i,
-        y: start.y + stepY * i,
-        z: start.z + stepZ * i,
+        x: px,
+        y: py,
+        z: pz,
       });
     } catch {
       // 範囲外等でのエラー防止

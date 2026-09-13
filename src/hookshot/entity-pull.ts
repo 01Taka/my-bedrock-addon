@@ -8,14 +8,16 @@ import { HOOKSHOT_BLAST_CONFIG } from "./blast-jump";
 export const ENTITY_PULL_CONFIG: EntityPullConfig = {
   /** 横方向の引き寄せインパルス係数 */
   HORIZONTAL_WEIGHT: 1.0,
-  /** 縦方向の引き寄せインパルス（浮遊・持ち上げ成分） */
-  VERTICAL_LIFT: 0.2,
-  /** Y軸方向の最低インパルス強度 */
-  MIN_VERTICAL_IMPULSE: 0.8,
+  /** Y座標差が閾値（2ブロック）以下のときの基本垂直インパルス（一定） */
+  BASE_VERTICAL_IMPULSE: 2.0,
+  /** 高低差に応じた垂直インパルス加算を開始するY座標差の閾値（ブロック単位） */
+  HEIGHT_DIFF_THRESHOLD: 2.0,
+  /** 高低差が閾値を超えた場合に加算する垂直インパルス係数（1ブロックあたり） */
+  HEIGHT_DIFF_VERTICAL_WEIGHT: 0.2,
   /** 最大インパルス速度 */
-  MAX_IMPULSE_SPEED: 2.5,
+  MAX_IMPULSE_SPEED: 5.0,
   /** プレイヤー手前で止めるためのオフセット距離（ブロック単位） */
-  STOP_OFFSET_DISTANCE: 1.5,
+  STOP_OFFSET_DISTANCE: 1.0,
   /** 引き寄せ時のサウンドID */
   SOUND_ID: "item.trident.return",
   /** サウンド音量 */
@@ -105,13 +107,17 @@ export function executeEntityPull(
   const deltaX = targetX - entityPos.x;
   const deltaY = targetY - entityPos.y;
   const deltaZ = targetZ - entityPos.z;
+  // プレイヤーと対象エンティティの高低差（プレイヤーのy座標 - 対象のy座標）
+  const diffY = playerPos.y - entityPos.y;
 
   // インパルス計算
   let impulseX = deltaX * config.HORIZONTAL_WEIGHT;
-  let impulseY = Math.max(
-    config.MIN_VERTICAL_IMPULSE,
-    deltaY * config.HORIZONTAL_WEIGHT + config.VERTICAL_LIFT,
-  );
+  let impulseY = config.BASE_VERTICAL_IMPULSE;
+  if (diffY > config.HEIGHT_DIFF_THRESHOLD) {
+    impulseY +=
+      (diffY - config.HEIGHT_DIFF_THRESHOLD) *
+      config.HEIGHT_DIFF_VERTICAL_WEIGHT;
+  }
   let impulseZ = deltaZ * config.HORIZONTAL_WEIGHT;
 
   // 速度ベクトルの大きさを制限

@@ -30,7 +30,8 @@ import {
   handlePlayerGroundTouch,
   setJumpButtonReleasedInAir,
   handleHookshotEntityHit,
-  handleBlastJumpFallDamage,
+  handleBlastJumpDamage,
+  updateFallDamageImmunity,
   isHoldingHookshot,
 } from "./hookshot";
 
@@ -73,9 +74,9 @@ world.afterEvents.playerButtonInput.subscribe((event) => {
   handleBlastJumpButtonInput(event);
 });
 
-// 爆風ジャンプ後の落下ダメージ軽減・無効化（ウィンドチャージ仕様）
+// ダメージ判定前（爆風ジャンプ後の2秒間は落下ダメージ無効化）
 world.beforeEvents.entityHurt.subscribe((event) => {
-  handleBlastJumpFallDamage(event);
+  handleBlastJumpDamage(event);
 });
 
 // エンティティ攻撃（フックショットで引き寄せたモブへのフィニッシャー攻撃）
@@ -83,7 +84,7 @@ world.afterEvents.entityHitEntity.subscribe((event) => {
   handleHookshotEntityHit(event);
 });
 
-// 定期監視ループ（着地による初期化 ＆ アクションバーHUD更新）
+// 定期監視ループ（着地による初期化 ＆ 落下ダメージ無効化更新 ＆ アクションバーHUD更新）
 system.runInterval(() => {
   for (const player of world.getAllPlayers()) {
     if (!player.isValid) continue;
@@ -103,6 +104,9 @@ system.runInterval(() => {
       } catch {
         // フォールバック
       }
+
+      // 落下ダメージ無効化状態の更新（発動時Y座標以下になってからのカウントダウン等）
+      updateFallDamageImmunity(player, 2);
     }
 
     // フックショットを所持している場合はアクションバーHUDを更新

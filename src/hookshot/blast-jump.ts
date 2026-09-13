@@ -7,6 +7,7 @@ import {
   PlayerButtonInputAfterEvent,
   EntityHurtBeforeEvent,
   EntityDamageCause,
+  system,
 } from "@minecraft/server";
 import { HookshotBlastConfig } from "./types";
 import { getPlayerMovementInput } from "./player-movement";
@@ -34,16 +35,31 @@ export const HOOKSHOT_BLAST_CONFIG: HookshotBlastConfig = {
   /** フックショット着弾後の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
   POST_HOOK_DOWNWARD_INERTIA_RETENTION: 0.3,
   /** フックショット着弾後の爆風ジャンプ: 水平慣性の維持率（0.0: 完全リセット, 1.0: 減衰なし, 0.6: 60%維持） */
-  POST_HOOK_HORIZONTAL_INERTIA_RETENTION: 0.6,
+  POST_HOOK_HORIZONTAL_INERTIA_RETENTION: 0.4,
   /** フックショット着弾後の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
-  POST_HOOK_HORIZONTAL_INPUT_WEIGHT: 0.9,
+  POST_HOOK_HORIZONTAL_INPUT_WEIGHT: 0.1,
   /** フックショット着弾後の爆風ジャンプ: 最大速度制限 */
   POST_HOOK_MAX_IMPULSE_SPEED: 3.0,
 
-  /** 爆風パーティクルID */
-  PARTICLE_ID: "minecraft:wind_charge_explosion",
+  /** 前入力時の水平速度減衰率 */
+  FORWARD_HORIZONTAL_RETENTION: 0.7,
+  /** 入力なし時の水平速度減衰率 */
+  NEUTRAL_HORIZONTAL_RETENTION: 0.3,
+  /** 後ろ入力時に移動方向と反対方向に与える水平インパルス強度 */
+  BACKWARD_IMPULSE_FORCE: 0.6,
+  /** 静止状態での前入力時に与える水平推進インパルス強度 */
+  FORWARD_IMPULSE_FORCE: 0.5,
+  /** 平行入力判定のデッドゾーンしきい値（スティック誤差許容） */
+  PARALLEL_DEADZONE: 0.2,
+
+  /** 爆風パーティクルID（大爆発） */
+  PARTICLE_ID: "minecraft:huge_explosion_emitter",
+  /** 風爆発パーティクルID */
+  WIND_PARTICLE_ID: "minecraft:wind_explosion_emitter",
+  /** 煙爆発パーティクルID */
+  SMOKE_PARTICLE_ID: "minecraft:explosion_particle",
   /** 爆風サウンドID */
-  SOUND_ID: "breeze.wind_charge.burst",
+  SOUND_ID: "random.explode",
   /** サウンド音量 */
   SOUND_VOLUME: 1.0,
   /** サウンドピッチ */
@@ -58,14 +74,20 @@ export const HOOKSHOT_BLAST_CONFIG: HookshotBlastConfig = {
   FINISHER_KNOCKBACK_FORCE: 1.8,
   /** 引き寄せモブへのフィニッシャー攻撃時の上方向ノックバック補正 */
   FINISHER_VERTICAL_LIFT: 0.35,
-  /** 爆風ジャンプ地点を基準にした落下ダメージの無効化・軽減機能（ウィンドチャージ仕様） */
-  RESET_FALL_DAMAGE_HEIGHT: true,
-  /** 落下ダメージを受けない安全落下距離（ブロック数・バニラ基準: 3） */
-  SAFE_FALL_DISTANCE: 3,
-};
 
-// 最後に爆風ジャンプを発動した高さY座標（ウィンドチャージ仕様の落下ダメージ基準点）
-const lastBlastJumpYMap = new Map<string, number>();
+  /** 爆風ジャンプ後の落下ダメージ無効化時間（tick単位: 40tick = 2秒） */
+  FALL_DAMAGE_IMMUNITY_TICKS: 40,
+  /** 落下ダメージ無効化のカウントダウン開始Yオフセット（発動地点Y - この値 以下でカウントダウン開始。デフォルト: 3） */
+  IMMUNITY_TRIGGER_Y_OFFSET: 3,
+  /** 落下ダメージ無効化終了時の通知パーティクルID */
+  IMMUNITY_EXPIRE_PARTICLE: "minecraft:smoke_particle",
+  /** 落下ダメージ無効化終了時の通知サウンドID */
+  IMMUNITY_EXPIRE_SOUND: "random.break",
+  /** 落下ダメージ無効化終了時のサウンド音量 */
+  IMMUNITY_EXPIRE_SOUND_VOLUME: 0.8,
+  /** 落下ダメージ無効化終了時のサウンドピッチ */
+  IMMUNITY_EXPIRE_SOUND_PITCH: 1.5,
+};
 
 // プレイヤーごとの爆風ジャンプ可能状態（true: 使用可能 / false: 使用済み）
 const blastJumpStateMap = new Map<string, boolean>();
@@ -75,6 +97,128 @@ const jumpButtonReleasedInAirMap = new Map<string, boolean>();
 
 // 空中でのフックショット着弾フラグ（true: フックショット着弾後の爆風ジャンプ / false: 着弾前）
 const hookshotLandedInAirMap = new Map<string, boolean>();
+
+/** 落下ダメージ無効化の状態 */
+interface FallImmunityState {
+  /** 爆風ジャンプ発動時のY座標 */
+  startY: number;
+  /** startY - IMMUNITY_TRIGGER_Y_OFFSET 以下に到達してからの残りtick数 */
+  remainingTicks: number;
+  /** 発動してからの経過tick数（発動直後の誤判定・誤クリア防止用） */
+  elapsedTicks: number;
+}
+
+// プレイヤーごとの落下ダメージ無効化状態
+const fallDamageImmunityMap = new Map<string, FallImmunityState>();
+
+/**
+ * プレイヤーが現在落下ダメージ無効化中か判定
+ */
+export function isFallDamageImmune(player: Player): boolean {
+  return fallDamageImmunityMap.has(player.id);
+}
+
+/**
+ * 爆風ジャンプによる落下ダメージ無効化を開始
+ * （発動時 - 3 ブロック以下になってから規定時間を過ぎるか、着地するまで有効）
+ */
+export function startFallDamageImmunity(
+  player: Player,
+  config: HookshotBlastConfig = HOOKSHOT_BLAST_CONFIG,
+): void {
+  fallDamageImmunityMap.set(player.id, {
+    startY: player.location.y,
+    remainingTicks: config.FALL_DAMAGE_IMMUNITY_TICKS,
+    elapsedTicks: 0,
+  });
+}
+
+/**
+ * 落下ダメージ無効化状態を通知なしでクリア（着地時など）
+ */
+export function clearFallDamageImmunity(player: Player): void {
+  fallDamageImmunityMap.delete(player.id);
+}
+
+/**
+ * 落下ダメージ無効化状態の更新処理（定期ループから実行）
+ * @param player プレイヤー
+ * @param deltaTicks 経過tick数
+ * @param config 設定
+ */
+export function updateFallDamageImmunity(
+  player: Player,
+  deltaTicks: number = 2,
+  config: HookshotBlastConfig = HOOKSHOT_BLAST_CONFIG,
+): void {
+  const state = fallDamageImmunityMap.get(player.id);
+  if (!state) return;
+
+  state.elapsedTicks += deltaTicks;
+
+  // 発動直後（最初の4tick = 0.2秒）は地面判定によるクリアをスキップ
+  if (state.elapsedTicks <= 4) {
+    return;
+  }
+
+  // 地面に着地している場合：通知なし（スキップ）で静かに終了
+  if (player.isOnGround) {
+    clearFallDamageImmunity(player);
+    return;
+  }
+
+  // 空中で発動地点 - IMMUNITY_TRIGGER_Y_OFFSET 以下の高さに達している場合、タイマーをカウントダウン
+  const triggerY = state.startY - config.IMMUNITY_TRIGGER_Y_OFFSET;
+  if (player.location.y <= triggerY) {
+    state.remainingTicks -= deltaTicks;
+    if (state.remainingTicks <= 0) {
+      // 規定時間超過により無効化終了（音とエフェクトで通知）
+      clearFallDamageImmunity(player);
+
+      try {
+        const headPos = player.getHeadLocation();
+        const offsets = [
+          { x: 0, y: 0, z: 0 },
+          { x: 0.25, y: -0.2, z: 0.25 },
+          { x: -0.25, y: -0.2, z: -0.25 },
+          { x: 0.25, y: -0.2, z: -0.25 },
+          { x: -0.25, y: -0.2, z: 0.25 },
+        ];
+        for (const off of offsets) {
+          player.dimension.spawnParticle(config.IMMUNITY_EXPIRE_PARTICLE, {
+            x: headPos.x + off.x,
+            y: headPos.y + off.y,
+            z: headPos.z + off.z,
+          });
+        }
+        player.playSound(config.IMMUNITY_EXPIRE_SOUND, {
+          volume: config.IMMUNITY_EXPIRE_SOUND_VOLUME,
+          pitch: config.IMMUNITY_EXPIRE_SOUND_PITCH,
+        });
+      } catch {
+        // 例外防止
+      }
+    }
+  }
+}
+
+/**
+ * 落下ダメージイベントの処理ハンドラー（爆風ジャンプ後の落下ダメージ無効化期間中はダメージをキャンセル）
+ */
+export function handleBlastJumpDamage(event: EntityHurtBeforeEvent): void {
+  if (!(event.hurtEntity instanceof Player)) return;
+
+  const player = event.hurtEntity;
+  const cause = event.damageSource.cause;
+
+  if (cause === EntityDamageCause.fall) {
+    if (isFallDamageImmune(player)) {
+      event.cancel = true;
+      // 着地による落下ダメージを無効化したので、静かに無効化を終了
+      clearFallDamageImmunity(player);
+    }
+  }
+}
 
 /**
  * プレイヤーがメインハンドにフックショットを持っているか判定
@@ -124,7 +268,10 @@ export function consumeBlastJump(player: Player): void {
 /**
  * 空中でジャンプボタンが離された状態を設定
  */
-export function setJumpButtonReleasedInAir(player: Player, released: boolean): void {
+export function setJumpButtonReleasedInAir(
+  player: Player,
+  released: boolean,
+): void {
   jumpButtonReleasedInAirMap.set(player.id, released);
 }
 
@@ -142,6 +289,11 @@ export function handlePlayerGroundTouch(player: Player): void {
   resetBlastJump(player);
   setHookshotLandedInAir(player, false);
   setJumpButtonReleasedInAir(player, false);
+
+  const state = fallDamageImmunityMap.get(player.id);
+  if (state && state.elapsedTicks > 4) {
+    clearFallDamageImmunity(player);
+  }
 }
 
 /**
@@ -206,11 +358,6 @@ export function executeBlastJump(
   // 再度空中でボタンを離すまで連続発動を防止
   setJumpButtonReleasedInAir(player, false);
 
-  // 爆風ジャンプを発動した高さY座標を記録（落下ダメージ計算の基準点）
-  if (config.RESET_FALL_DAMAGE_HEIGHT) {
-    lastBlastJumpYMap.set(player.id, player.location.y);
-  }
-
   // フックショット着弾後か着弾前かに応じた設定値を選択
   const isPostHook = hookshotLandedInAirMap.get(player.id) === true;
   const upwardImpulse = isPostHook
@@ -260,9 +407,55 @@ export function executeBlastJump(
     // 取得不可時は0
   }
 
-  // 水平方向の新規入力インパルス
-  let addedImpulseX = inputWorldX * inputWeight;
-  let addedImpulseZ = inputWorldZ * inputWeight;
+  const currentHorizSpeed = Math.hypot(currentX, currentZ);
+
+  // 進行方向単位ベクトルの決定（移動中なら移動方向、静止中なら視線方向）
+  let uDirX = viewFwdX;
+  let uDirZ = viewFwdZ;
+  const isMoving = currentHorizSpeed > 0.05;
+  if (isMoving) {
+    uDirX = currentX / currentHorizSpeed;
+    uDirZ = currentZ / currentHorizSpeed;
+  }
+
+  // 3. 入力ベクトルを「進行方向に対して平行な成分」と「垂直（横）な成分」に分解
+  const parallelInput = inputWorldX * uDirX + inputWorldZ * uDirZ;
+  const perpInputX = inputWorldX - parallelInput * uDirX;
+  const perpInputZ = inputWorldZ - parallelInput * uDirZ;
+
+  // 4. 垂直なベクトル（横方向のベクトル）のインパルス計算
+  // ベクトルの長さに応じた勢いを現在の勢いに加算
+  const steerImpulseX = perpInputX * inputWeight;
+  const steerImpulseZ = perpInputZ * inputWeight;
+
+  // 5. 平行方向のベクトル（前 / なし / 後ろ の3段階判定）
+  const deadzone = config.PARALLEL_DEADZONE ?? 0.2;
+  let actualRetentionRate = config.NEUTRAL_HORIZONTAL_RETENTION ?? 0.15;
+  let extraParallelImpulseX = 0;
+  let extraParallelImpulseZ = 0;
+
+  if (parallelInput > deadzone) {
+    // 【前入力】現在の水平方向の移動速度を60%に減衰
+    actualRetentionRate = config.FORWARD_HORIZONTAL_RETENTION ?? 0.6;
+    if (!isMoving) {
+      // 静止時の前入力: 前方へ推進力を付与
+      extraParallelImpulseX = uDirX * (config.FORWARD_IMPULSE_FORCE ?? 0.5);
+      extraParallelImpulseZ = uDirZ * (config.FORWARD_IMPULSE_FORCE ?? 0.5);
+    }
+  } else if (parallelInput < -deadzone) {
+    // 【後ろ入力】完全に水平方向の勢いを無くしたあと、移動方向と反対方向に一定の大きさの水平方向の勢いを与える
+    actualRetentionRate = 0.0;
+    const backwardForce = config.BACKWARD_IMPULSE_FORCE ?? 0.6;
+    extraParallelImpulseX = -uDirX * backwardForce;
+    extraParallelImpulseZ = -uDirZ * backwardForce;
+  } else {
+    // 【入力なし】現在の水平方向の移動速度を15%に減衰
+    actualRetentionRate = config.NEUTRAL_HORIZONTAL_RETENTION ?? 0.15;
+  }
+
+  // 水平方向の新規追加インパルス（横方向加算 ＋ 平行追加インパルス）
+  let addedImpulseX = steerImpulseX + extraParallelImpulseX;
+  let addedImpulseZ = steerImpulseZ + extraParallelImpulseZ;
 
   // 新規入力インパルスの制限
   const inputSpeed = Math.hypot(addedImpulseX, addedImpulseZ);
@@ -272,39 +465,76 @@ export function executeBlastJump(
     addedImpulseZ *= scale;
   }
 
-  // 元の水平速度を設定値（retentionRate）に応じて減衰させ、新規インパルスを加算
-  const retention = Math.max(0, retentionRate);
-  const impulseX = (retention - 1.0) * currentX + addedImpulseX;
-  const impulseZ = (retention - 1.0) * currentZ + addedImpulseZ;
+  // --- 処理順序: 減速処理 -> 追加の勢い -> 落下ダメージ無効化 ---
 
-  // Y軸の勢いの計算:
-  // 下方向（落下速度: currentY < 0）の場合は完全相殺ではなく、倍率（downwardRetentionRate）で減速させた上で上昇インパルスを加算
-  let impulseY = upwardImpulse;
+  // ① 減速処理（既存の慣性を減衰）
+  const retention = Math.max(0, actualRetentionRate);
+  const dampingImpulseX = (retention - 1.0) * currentX;
+  const dampingImpulseZ = (retention - 1.0) * currentZ;
+
+  let dampingImpulseY = 0;
   if (currentY < 0) {
     const downwardRetention = Math.max(0, downwardRetentionRate);
-    impulseY = upwardImpulse + currentY * (downwardRetention - 1.0);
-  } else {
-    impulseY = upwardImpulse;
+    dampingImpulseY = currentY * (downwardRetention - 1.0);
   }
 
-  // プレイヤーにインパルスを適用（元の速度が減衰された後に追加の勢いが付与される）
   player.applyImpulse({
-    x: impulseX,
-    y: impulseY,
-    z: impulseZ,
+    x: dampingImpulseX,
+    y: dampingImpulseY,
+    z: dampingImpulseZ,
   });
 
-  // 足元に爆風パーティクルとサウンドをスポーン
+  // ② 追加の勢い（上方向インパルス ＋ 入力方向への水平インパルス）
+  player.applyImpulse({
+    x: addedImpulseX,
+    y: upwardImpulse,
+    z: addedImpulseZ,
+  });
+
+  // ③ 爆風ジャンプ後の落下ダメージ無効化を開始（2秒間。切れたタイミングで音とエフェクトで通知）
+  startFallDamageImmunity(player, config);
+
+  // 爆風パーティクルとサウンドの再生
   try {
     const feetPos: Vector3 = {
       x: player.location.x,
       y: player.location.y,
       z: player.location.z,
     };
-    player.dimension.spawnParticle(config.PARTICLE_ID, feetPos);
-    player.playSound(config.SOUND_ID, {
-      volume: config.SOUND_VOLUME,
-      pitch: isPostHook ? 1.4 : config.SOUND_PITCH,
+
+    // ① 大爆発エフェクト（TNT爆発）
+    if (config.PARTICLE_ID) {
+      player.dimension.spawnParticle(config.PARTICLE_ID, feetPos);
+    }
+    // ② 風圧爆発エフェクト
+    if (config.WIND_PARTICLE_ID) {
+      player.dimension.spawnParticle(config.WIND_PARTICLE_ID, feetPos);
+    }
+    // ③ 煙爆発エフェクト
+    if (config.SMOKE_PARTICLE_ID) {
+      player.dimension.spawnParticle(config.SMOKE_PARTICLE_ID, feetPos);
+      player.dimension.spawnParticle(config.SMOKE_PARTICLE_ID, {
+        x: feetPos.x + 0.2,
+        y: feetPos.y,
+        z: feetPos.z + 0.2,
+      });
+      player.dimension.spawnParticle(config.SMOKE_PARTICLE_ID, {
+        x: feetPos.x - 0.2,
+        y: feetPos.y,
+        z: feetPos.z - 0.2,
+      });
+    }
+
+    // 爆発音と風圧音の再生
+    if (config.SOUND_ID) {
+      player.playSound(config.SOUND_ID, {
+        volume: config.SOUND_VOLUME,
+        pitch: isPostHook ? 1.4 : config.SOUND_PITCH,
+      });
+    }
+    player.playSound("breeze.wind_charge.burst", {
+      volume: 0.9,
+      pitch: isPostHook ? 1.3 : 1.1,
     });
   } catch {
     // 例外防止
@@ -328,43 +558,4 @@ export function updateBlastHud(player: Player): void {
       ready ? "§a✦ BLAST READY§r" : "§7✧ BLAST USED§r",
     );
   }
-}
-
-/**
- * 爆風ジャンプによる落下ダメージ軽減・無効化ハンドラー（ウィンドチャージ仕様）
- */
-export function handleBlastJumpFallDamage(
-  event: EntityHurtBeforeEvent,
-  config: HookshotBlastConfig = HOOKSHOT_BLAST_CONFIG,
-): void {
-  if (!config.RESET_FALL_DAMAGE_HEIGHT) return;
-  if (event.damageSource.cause !== EntityDamageCause.fall) return;
-
-  const entity = event.hurtEntity;
-  if (!(entity instanceof Player)) return;
-
-  const blastY = lastBlastJumpYMap.get(entity.id);
-  if (blastY === undefined) return;
-
-  const landY = entity.location.y;
-  const fallDistanceFromBlast = blastY - landY;
-
-  // 爆風ジャンプ地点から安全距離（3ブロック）以内であれば落下ダメージを完全無効化
-  if (fallDistanceFromBlast <= config.SAFE_FALL_DISTANCE) {
-    event.cancel = true;
-  } else {
-    // 爆風ジャンプ地点より下へ落下した場合は、その地点からの距離のみで落下ダメージを再計算・軽減
-    const recalculatedDamage = Math.max(
-      0,
-      Math.floor(fallDistanceFromBlast - config.SAFE_FALL_DISTANCE),
-    );
-    if (recalculatedDamage <= 0) {
-      event.cancel = true;
-    } else if (recalculatedDamage < event.damage) {
-      event.damage = recalculatedDamage;
-    }
-  }
-
-  // 落下ダメージ判定後は記録を削除
-  lastBlastJumpYMap.delete(entity.id);
 }

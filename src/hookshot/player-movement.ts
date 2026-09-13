@@ -10,17 +10,17 @@ export const PLAYER_MOVEMENT_CONFIG: PlayerMovementConfig = {
   /** インパルスの最大勢い */
   MAX_IMPULSE_DISTANCE: 80,
   /** 横方向の重み（横方向の距離に対して加えるインパルス強度の係数） */
-  HORIZONTAL_WEIGHT: 0.12,
+  HORIZONTAL_WEIGHT: 0.1,
   /** 縦方向の重み（縦方向の距離に対して加えるインパルス強度の係数） */
   VERTICAL_WEIGHT: 0.07,
   /** 高さオフセット（着弾地点の何マス上を目標とするか） */
   HEIGHT_OFFSET: 8,
-  /** 発射方向への影響の重み（垂直入力による横方向の偏向係数） */
-  STEERING_WEIGHT: 1.0,
-  /** 発射距離減衰の重み（発射方向に対して下がる入力による減衰係数） */
-  DISTANCE_DAMPING_WEIGHT: 0.3,
-  /** 発射距離増幅の重み（発射方向に向かう入力による増幅係数） */
-  DISTANCE_BOOST_WEIGHT: 0.1,
+  /** プレイヤーの横入力による偏向加算インパルスの重み */
+  STEERING_WEIGHT: 1.1,
+  /** プレイヤーの後退入力による減速加算インパルスの重み */
+  DISTANCE_DAMPING_WEIGHT: 0.8,
+  /** プレイヤーの前進入力による加速加算インパルスの重み */
+  DISTANCE_BOOST_WEIGHT: 0.5,
 };
 
 /**
@@ -87,27 +87,27 @@ export function applyPlayerMovementImpulse(
   const perpInputX = inputWorldX - parallelInput * uLaunchX;
   const perpInputZ = inputWorldZ - parallelInput * uLaunchZ;
 
-  // 4. 各重みの適用
-  // (A) 発射距離の増幅・減衰（平行成分）
-  let distanceScale = 1.0;
+  // 4. プレイヤー入力による加算インパルスの計算（足し算）
+  // (A) 発射方向に対する前進加速・後退減速の加算インパルス
+  let parallelAdd = 0;
   if (parallelInput > 0) {
-    // 発射方向に向かう入力: 距離増幅
-    distanceScale += parallelInput * config.DISTANCE_BOOST_WEIGHT;
+    // 発射方向に向かう入力: 前進方向へ加算
+    parallelAdd = parallelInput * config.DISTANCE_BOOST_WEIGHT;
   } else if (parallelInput < 0) {
-    // 発射方向に対して下がる入力: 距離減衰 (parallelInputは負)
-    distanceScale += parallelInput * config.DISTANCE_DAMPING_WEIGHT;
-    distanceScale = Math.max(0.1, distanceScale); // 完全に停止しないよう下限を設定
+    // 発射方向に対して下がる入力: 後退方向（逆方向）へ加算（parallelInputは負）
+    parallelAdd = parallelInput * config.DISTANCE_DAMPING_WEIGHT;
   }
+  const parallelAddX = parallelAdd * uLaunchX;
+  const parallelAddZ = parallelAdd * uLaunchZ;
 
-  // (B) 発射方向の偏向（垂直成分）
-  const baseHorizImpulse = launchDistHoriz * config.HORIZONTAL_WEIGHT;
-  const steerX = perpInputX * config.STEERING_WEIGHT * baseHorizImpulse;
-  const steerZ = perpInputZ * config.STEERING_WEIGHT * baseHorizImpulse;
+  // (B) 発射方向に対する横向き偏向の加算インパルス
+  const steerX = perpInputX * config.STEERING_WEIGHT;
+  const steerZ = perpInputZ * config.STEERING_WEIGHT;
 
-  // 5. 最終インパルスベクトルの合成
-  let impulseX = deltaX * config.HORIZONTAL_WEIGHT * distanceScale + steerX;
-  let impulseY = deltaY * config.VERTICAL_WEIGHT * distanceScale;
-  let impulseZ = deltaZ * config.HORIZONTAL_WEIGHT * distanceScale + steerZ;
+  // 5. 最終インパルスベクトルの合成（基本インパルスに入力インパルスを足し算）
+  let impulseX = deltaX * config.HORIZONTAL_WEIGHT + parallelAddX + steerX;
+  let impulseY = deltaY * config.VERTICAL_WEIGHT;
+  let impulseZ = deltaZ * config.HORIZONTAL_WEIGHT + parallelAddZ + steerZ;
 
   // 6. 最大インパルス制限（ブロック換算距離の上限）
   // MAX_IMPULSE_DISTANCE（ブロック）分の勢いを最大値としてクランプ
