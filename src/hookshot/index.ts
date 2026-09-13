@@ -27,7 +27,10 @@ import {
   executeBlastJump,
   updateBlastHud,
   handleBlastJumpButtonInput,
-  setJumpButtonReleased,
+  setJumpButtonReleasedInAir,
+  setHookshotLandedInAir,
+  handlePlayerGroundTouch,
+  handleBlastJumpFallDamage,
 } from "./blast-jump";
 import { handleHookshotEntityHit } from "./combat";
 import { HookshotParticleConfig, HookshotBlastConfig } from "./types";
@@ -60,7 +63,10 @@ export {
   executeBlastJump,
   updateBlastHud,
   handleBlastJumpButtonInput,
-  setJumpButtonReleased,
+  setJumpButtonReleasedInAir,
+  setHookshotLandedInAir,
+  handlePlayerGroundTouch,
+  handleBlastJumpFallDamage,
   handleHookshotEntityHit,
   executePlayerMovementToBlock,
   executePlayerMovementToEntity,
@@ -228,7 +234,8 @@ export function executeHookshot(
     spawnHookshotTrail(player.dimension, startPos, targetPos);
     spawnHookshotImpact(player.dimension, targetPos);
 
-    // フックショット着弾により爆風ジャンプをリセット
+    // フックショット着弾により爆風ジャンプをリセットし、着弾後フェーズに設定
+    setHookshotLandedInAir(player, true);
     resetBlastJump(player);
     updateBlastHud(player);
 
@@ -250,7 +257,8 @@ export function executeHookshot(
     spawnHookshotTrail(player.dimension, startPos, blockHitPos);
     spawnHookshotImpact(player.dimension, blockHitPos);
 
-    // フックショット着弾により爆風ジャンプをリセット
+    // フックショット着弾により爆風ジャンプをリセットし、着弾後フェーズに設定
+    setHookshotLandedInAir(player, true);
     resetBlastJump(player);
     updateBlastHud(player);
 

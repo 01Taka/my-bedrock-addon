@@ -62,12 +62,28 @@ export interface HookshotParticleConfig {
  * 爆風ジャンプおよび引き寄せモブへの攻撃に関する設定型
  */
 export interface HookshotBlastConfig {
-  /** 爆風ジャンプの上昇インパルス強度 */
-  UPWARD_IMPULSE: number;
-  /** プレイヤーの入力（WASD/スティック）による水平方向インパルスの強度（設定で変更可能） */
-  HORIZONTAL_INPUT_WEIGHT: number;
-  /** 爆風ジャンプの最大速度制限 */
-  MAX_IMPULSE_SPEED: number;
+  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 上方向インパルス強度 */
+  PRE_HOOK_UPWARD_IMPULSE: number;
+  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
+  PRE_HOOK_DOWNWARD_INERTIA_RETENTION: number;
+  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 水平慣性の維持率（0.0: 完全リセット, 1.0: 減衰なし, 0.4: 40%維持） */
+  PRE_HOOK_HORIZONTAL_INERTIA_RETENTION: number;
+  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
+  PRE_HOOK_HORIZONTAL_INPUT_WEIGHT: number;
+  /** 地面離脱後〜フックショット着弾前の爆風ジャンプ: 最大速度制限 */
+  PRE_HOOK_MAX_IMPULSE_SPEED: number;
+
+  /** フックショット着弾後の爆風ジャンプ: 上方向インパルス強度 */
+  POST_HOOK_UPWARD_IMPULSE: number;
+  /** フックショット着弾後の爆風ジャンプ: 落下(下方向)速度の維持率・倍率（0.0: 完全相殺, 1.0: 減速なし, 0.3: 30%に減速後に上昇力加算） */
+  POST_HOOK_DOWNWARD_INERTIA_RETENTION: number;
+  /** フックショット着弾後の爆風ジャンプ: 水平慣性の維持率（0.0: 完全リセット, 1.0: 減衰なし, 0.6: 60%維持） */
+  POST_HOOK_HORIZONTAL_INERTIA_RETENTION: number;
+  /** フックショット着弾後の爆風ジャンプ: プレイヤー入力(WASD/スティック)による水平インパルス強度 */
+  POST_HOOK_HORIZONTAL_INPUT_WEIGHT: number;
+  /** フックショット着弾後の爆風ジャンプ: 最大速度制限 */
+  POST_HOOK_MAX_IMPULSE_SPEED: number;
+
   /** 爆風パーティクルID */
   PARTICLE_ID: string;
   /** 爆風サウンドID */
@@ -86,5 +102,9 @@ export interface HookshotBlastConfig {
   FINISHER_KNOCKBACK_FORCE: number;
   /** 引き寄せモブへのフィニッシャー攻撃時の上方向ノックバック補正 */
   FINISHER_VERTICAL_LIFT: number;
+  /** 爆風ジャンプ地点を基準にした落下ダメージの無効化・軽減機能（ウィンドチャージ仕様） */
+  RESET_FALL_DAMAGE_HEIGHT: boolean;
+  /** 落下ダメージを受けない安全落下距離（ブロック数・バニラ基準: 3） */
+  SAFE_FALL_DISTANCE: number;
 }
 

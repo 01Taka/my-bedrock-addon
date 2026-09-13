@@ -27,8 +27,10 @@ import {
   resetBlastJump,
   updateBlastHud,
   handleBlastJumpButtonInput,
-  setJumpButtonReleased,
+  handlePlayerGroundTouch,
+  setJumpButtonReleasedInAir,
   handleHookshotEntityHit,
+  handleBlastJumpFallDamage,
   isHoldingHookshot,
 } from "./hookshot";
 
@@ -71,25 +73,32 @@ world.afterEvents.playerButtonInput.subscribe((event) => {
   handleBlastJumpButtonInput(event);
 });
 
+// 爆風ジャンプ後の落下ダメージ軽減・無効化（ウィンドチャージ仕様）
+world.beforeEvents.entityHurt.subscribe((event) => {
+  handleBlastJumpFallDamage(event);
+});
+
 // エンティティ攻撃（フックショットで引き寄せたモブへのフィニッシャー攻撃）
 world.afterEvents.entityHitEntity.subscribe((event) => {
   handleHookshotEntityHit(event);
 });
 
-// 定期監視ループ（着地による爆風ジャンプのリセット ＆ アクションバーHUD更新）
+// 定期監視ループ（着地による初期化 ＆ アクションバーHUD更新）
 system.runInterval(() => {
   for (const player of world.getAllPlayers()) {
     if (!player.isValid) continue;
 
-    // 地面に着地した場合は爆風ジャンプをリセット
+    // 地面に着地している場合
     if (player.isOnGround) {
-      resetBlastJump(player);
+      handlePlayerGroundTouch(player);
+    } else {
+      // 空中にいる場合、ジャンプボタンが押されていなければ空中でのリリース状態として記録（崖からの落下対応）
       try {
         if (
           player.inputInfo?.getButtonState(InputButton.Jump) ===
           ButtonState.Released
         ) {
-          setJumpButtonReleased(player);
+          setJumpButtonReleasedInAir(player, true);
         }
       } catch {
         // フォールバック

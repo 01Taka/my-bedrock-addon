@@ -11,7 +11,7 @@ export const ENTITY_PULL_CONFIG: EntityPullConfig = {
   /** 縦方向の引き寄せインパルス（浮遊・持ち上げ成分） */
   VERTICAL_LIFT: 0.2,
   /** Y軸方向の最低インパルス強度 */
-  MIN_VERTICAL_IMPULSE: 0.2,
+  MIN_VERTICAL_IMPULSE: 0.8,
   /** 最大インパルス速度 */
   MAX_IMPULSE_SPEED: 2.5,
   /** プレイヤー手前で止めるためのオフセット距離（ブロック単位） */
