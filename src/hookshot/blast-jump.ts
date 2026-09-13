@@ -294,12 +294,6 @@ export function executeBlastJump(
 
   // フックショット着弾後か着弾前かに応じた設定値を選択
   const isPostHook = hookshotLandedInAirMap.get(player.id) === true;
-  const upwardImpulse = isPostHook
-    ? config.POST_HOOK_UPWARD_IMPULSE
-    : config.PRE_HOOK_UPWARD_IMPULSE;
-  const downwardRetentionRate = isPostHook
-    ? config.POST_HOOK_DOWNWARD_INERTIA_RETENTION
-    : config.PRE_HOOK_DOWNWARD_INERTIA_RETENTION;
   const inputWeight = isPostHook
     ? config.POST_HOOK_HORIZONTAL_INPUT_WEIGHT
     : config.PRE_HOOK_HORIZONTAL_INPUT_WEIGHT;
@@ -361,27 +355,37 @@ export function executeBlastJump(
 
   // 5. 平行方向のベクトル（前 / なし / 後ろ の3段階判定）
   const deadzone = config.PARALLEL_DEADZONE ?? 0.2;
-  let actualRetentionRate = config.NEUTRAL_HORIZONTAL_RETENTION ?? 0.15;
+  const isForward = parallelInput > deadzone;
+  const isBackward = parallelInput < -deadzone;
+  const dirConfig = isForward
+    ? config.DIRECTIONAL.FORWARD
+    : isBackward
+      ? config.DIRECTIONAL.BACKWARD
+      : config.DIRECTIONAL.NEUTRAL;
+
+  // 水平速度維持率
+  const actualRetentionRate = dirConfig.HORIZONTAL_RETENTION;
+
+  // 垂直(Y方向)減衰インパルス計算（上昇時 / 落下時）
+  let dampingImpulseY = 0;
+  if (currentY < 0) {
+    dampingImpulseY = currentY * (dirConfig.DOWNWARD_RETENTION - 1.0);
+  } else {
+    dampingImpulseY = currentY * (dirConfig.UPWARD_RETENTION - 1.0);
+  }
+
+  // 追加上方向インパルス
+  const upwardImpulse = dirConfig.UPWARD_IMPULSE;
+
+  // 追加平行インパルス（水平方向インパルス または 静止時前進推進力）
   let extraParallelImpulseX = 0;
   let extraParallelImpulseZ = 0;
-
-  if (parallelInput > deadzone) {
-    // 【前入力】現在の水平方向の移動速度を60%に減衰
-    actualRetentionRate = config.FORWARD_HORIZONTAL_RETENTION ?? 0.6;
-    if (!isMoving) {
-      // 静止時の前入力: 前方へ推進力を付与
-      extraParallelImpulseX = uDirX * (config.FORWARD_IMPULSE_FORCE ?? 0.5);
-      extraParallelImpulseZ = uDirZ * (config.FORWARD_IMPULSE_FORCE ?? 0.5);
-    }
-  } else if (parallelInput < -deadzone) {
-    // 【後ろ入力】完全に水平方向の勢いを無くしたあと、移動方向と反対方向に一定の大きさの水平方向の勢いを与える
-    actualRetentionRate = 0.0;
-    const backwardForce = config.BACKWARD_IMPULSE_FORCE ?? 0.6;
-    extraParallelImpulseX = -uDirX * backwardForce;
-    extraParallelImpulseZ = -uDirZ * backwardForce;
-  } else {
-    // 【入力なし】現在の水平方向の移動速度を15%に減衰
-    actualRetentionRate = config.NEUTRAL_HORIZONTAL_RETENTION ?? 0.15;
+  if (dirConfig.HORIZONTAL_IMPULSE !== 0) {
+    extraParallelImpulseX = uDirX * dirConfig.HORIZONTAL_IMPULSE;
+    extraParallelImpulseZ = uDirZ * dirConfig.HORIZONTAL_IMPULSE;
+  } else if (!isMoving && isForward) {
+    extraParallelImpulseX = uDirX * (config.FORWARD_IMPULSE_FORCE ?? 0.5);
+    extraParallelImpulseZ = uDirZ * (config.FORWARD_IMPULSE_FORCE ?? 0.5);
   }
 
   // 水平方向の新規追加インパルス（横方向加算 ＋ 平行追加インパルス）
@@ -402,12 +406,6 @@ export function executeBlastJump(
   const retention = Math.max(0, actualRetentionRate);
   const dampingImpulseX = (retention - 1.0) * currentX;
   const dampingImpulseZ = (retention - 1.0) * currentZ;
-
-  let dampingImpulseY = 0;
-  if (currentY < 0) {
-    const downwardRetention = Math.max(0, downwardRetentionRate);
-    dampingImpulseY = currentY * (downwardRetention - 1.0);
-  }
 
   player.applyImpulse({
     x: dampingImpulseX,

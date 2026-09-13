@@ -16,7 +16,7 @@ export const PLAYER_MOVEMENT_CONFIG = {
   /** 縦方向の重み（縦方向の距離に対して加えるインパルス強度の係数） */
   VERTICAL_WEIGHT: 0.07,
   /** 高さオフセット（着弾地点の何マス上を目標とするか） */
-  HEIGHT_OFFSET: 10,
+  HEIGHT_OFFSET: 20,
   /** プレイヤーの横入力による偏向回転角度（最大角度、度数法） */
   STEERING_ANGLE_DEGREES: 20,
   /** プレイヤーの後退入力による減速加算インパルスの重み */
@@ -121,12 +121,49 @@ export const HOOKSHOT_BLAST_CONFIG = {
   /** フックショット着弾後の爆風ジャンプ: 最大速度制限 */
   POST_HOOK_MAX_IMPULSE_SPEED: 3.0,
 
-  /** 前入力時の水平速度減衰率（0.8 = 80%に減衰） */
-  FORWARD_HORIZONTAL_RETENTION: 0.8,
-  /** 入力なし時の水平速度減衰率（0.3 = 30%に減衰） */
-  NEUTRAL_HORIZONTAL_RETENTION: 0.3,
-  /** 後ろ入力時に移動方向と反対方向に与える水平インパルス強度 */
-  BACKWARD_IMPULSE_FORCE: 0.6,
+  /** 平行入力3段階（前・入力なし・後ろ）ごとの方向別挙動設定 */
+  DIRECTIONAL: {
+    /** 前入力時（低め・前進維持） */
+    FORWARD: {
+      /** 水平速度維持率（0.8 = 80%に減衰） */
+      HORIZONTAL_RETENTION: 0.8,
+      /** 下方向(落下)勢い維持率（0.4 = 40%維持） */
+      DOWNWARD_RETENTION: 0.4,
+      /** 上方向(上昇)勢い維持率（0.4 = 40%維持） */
+      UPWARD_RETENTION: 0.4,
+      /** 追加上方向インパルス強度 */
+      UPWARD_IMPULSE: 0.8,
+      /** 追加水平方向インパルス強度（進行方向を正、逆方向を負とする） */
+      HORIZONTAL_IMPULSE: 0.6,
+    },
+    /** 入力なし時（通常上昇ジャンプ） */
+    NEUTRAL: {
+      /** 水平速度維持率（0.4 = 40%に減衰） */
+      HORIZONTAL_RETENTION: 0.4,
+      /** 下方向(落下)勢い維持率（0.0 = 0にして完全相殺） */
+      DOWNWARD_RETENTION: 0.0,
+      /** 上方向(上昇)勢い維持率（0.6 = 60%維持） */
+      UPWARD_RETENTION: 0.6,
+      /** 追加上方向インパルス強度 */
+      UPWARD_IMPULSE: 1.2,
+      /** 追加水平方向インパルス強度（進行方向を正、逆方向を負とする） */
+      HORIZONTAL_IMPULSE: 0.0,
+    },
+    /** 後ろ入力時（反転バックジャンプ） */
+    BACKWARD: {
+      /** 水平速度維持率（0.0 = 完全に勢いを無くす） */
+      HORIZONTAL_RETENTION: 0.0,
+      /** 下方向(落下)勢い維持率（0.0 = 0にして完全相殺） */
+      DOWNWARD_RETENTION: 0.0,
+      /** 上方向(上昇)勢い維持率（0.6 = 60%維持） */
+      UPWARD_RETENTION: 0.6,
+      /** 追加上方向インパルス強度 */
+      UPWARD_IMPULSE: 1.2,
+      /** 追加水平方向インパルス強度（進行方向を正、逆方向を負とする: -0.6で反転方向へ付与） */
+      HORIZONTAL_IMPULSE: -0.8,
+    },
+  },
+
   /** 静止状態での前入力時に与える水平推進インパルス強度 */
   FORWARD_IMPULSE_FORCE: 0.5,
   /** 平行入力判定のデッドゾーンしきい値（スティック誤差許容） */
