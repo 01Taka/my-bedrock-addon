@@ -15,6 +15,7 @@ import {
   handleSettingsScriptEvent,
   handleSettingsItemUse,
 } from "./settings";
+import { handleHookshotUse } from "./hookshot";
 
 // 初期化
 system.run(() => {
@@ -37,8 +38,11 @@ world.afterEvents.playerBreakBlock.subscribe((event) => {
   treeMassDestruction(event);
 });
 
-// アイテム使用 (たいまつ持ち替え / 設定UI表示)
+// アイテム使用 (たいまつ持ち替え / 設定UI表示 / フックショット)
 world.beforeEvents.itemUse.subscribe((event) => {
+  handleHookshotUse(event, () => {
+    event.cancel = true;
+  });
   handleSettingsItemUse(event, () => {
     event.cancel = true;
   });
