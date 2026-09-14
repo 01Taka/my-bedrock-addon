@@ -37,7 +37,9 @@ function isSneakButtonPressed(player: Player): boolean {
 interface PlayerHookState {
   hitPos: Vector3;
   sneakTickCounter: number;
-  /** フック着弾時からの経過tick数（ピルチャージ用） */
+  /** 初回の巻き取りが開始されたか（巻き取り開始時の落下軽減権利の判定およびピルチャージ開始トリガー） */
+  hasStartedWinding: boolean;
+  /** 巻き取り開始時からの経過tick数（ピルチャージ用） */
   chargeTicks: number;
 }
 
@@ -68,7 +70,7 @@ export function isHoldingManualHookshot(player: Player): boolean {
  */
 export function getChargedPillCount(player: Player): number {
   const hook = playerHooks.get(player.id);
-  if (!hook) return 0;
+  if (!hook || !hook.hasStartedWinding) return 0;
   return Math.min(
     MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT,
     Math.floor(
@@ -91,30 +93,42 @@ export function updateManualHookshotHud(player: Player): void {
   if (!player.isValid) return;
 
   if (isHoldingManualHookshot(player) || playerHooks.has(player.id)) {
+    const hook = playerHooks.get(player.id);
+
+    // 1. 着弾中で、まだ最初の巻き取りが開始されていない場合:
+    //    オレンジ色(§6)で「着弾完了・巻き取り開始時の衝撃吸収ブレーキ待機中」を表示
+    if (hook && !hook.hasStartedWinding) {
+      player.onScreenDisplay.setActionBar("§6(▰▰▰)");
+      return;
+    }
+
+    // 2. 巻き取り開始後、または未着弾時（構えている状態）のHUD表示
     const pills = getChargedPillCount(player);
     const maxPills = MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
     // 着地中で実際には爆発とインパルスが発生しない場合はグレーっぽい薄緑(§2)、空中で発動可能な場合は鮮やかな緑(§a)
     const activeColor = player.isOnGround ? "§2" : "§a";
 
-    // 射程内で壁に着弾可能か判定
+    // 射程内で壁に着弾可能か判定（未着弾時の空ピル色用）
     let canHitWall = false;
-    try {
-      const blockHit = player.getBlockFromViewDirection({
-        maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-        includePassableBlocks: false,
-        includeLiquidBlocks: false,
-      });
-      canHitWall = blockHit !== undefined;
-    } catch {}
+    if (!hook) {
+      try {
+        const blockHit = player.getBlockFromViewDirection({
+          maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+          includePassableBlocks: false,
+          includeLiquidBlocks: false,
+        });
+        canHitWall = blockHit !== undefined;
+      } catch {}
+    }
 
-    // 空ピルの色: 射程内で壁に当たる時は明るい灰色(§7)、射程外や壁がない時は暗灰色(§8)
-    const emptyColor = canHitWall ? "§7" : "§8";
+    // 空ピルの色: 着弾中または射程内で壁に当たる時は明るい灰色(§7)、射程外や壁がない時は暗灰色(§8)
+    const emptyColor = hook || canHitWall ? "§7" : "§8";
 
     if (pills >= maxPills) {
       // 3つ満タン（着地中はグレーっぽい薄緑、空中で発動可能な場合は鮮やかな緑）
       player.onScreenDisplay.setActionBar(`${activeColor}(▰▰▰)`);
     } else if (pills === 0) {
-      // 0個（未着弾または着弾直後）: 射程内で壁に当たる時は明るい空ピル、射程外は暗灰色の空ピル
+      // 0個（未着弾または巻き取り開始直後）: 射程内で壁に当たる時/着弾中は明るい空ピル、射程外は暗灰色の空ピル
       player.onScreenDisplay.setActionBar(`${emptyColor}(▰▰▰)`);
     } else {
       // 1〜2個: 蓄積数に応じて表現（着地中はグレーっぽい薄緑、空中は鮮やかな緑、空きピルは射程判定を反映）
@@ -140,8 +154,9 @@ export function resetHook(
   const hook = playerHooks.get(player.id);
   if (!hook) return;
 
-  // 解除前のピル蓄積状態（ピルが3つ満タンか）を確認
+  // 解除前のピル蓄積状態（巻き取り開始済みかつピルが3つ満タンか）を確認
   const canReleaseBlast =
+    hook.hasStartedWinding &&
     Math.floor(
       hook.chargeTicks / MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_TICKS_PER_PILL,
     ) >= MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
@@ -259,6 +274,7 @@ export function handleManualHookshotUse(
     playerHooks.set(player.id, {
       hitPos,
       sneakTickCounter: 0,
+      hasStartedWinding: false,
       chargeTicks: 0,
     });
 
@@ -284,8 +300,10 @@ export function updateManualHookshots(): void {
     const hitPos = hook.hitPos;
     const headPos = player.getHeadLocation();
 
-    // 着弾後の経過tickをカウント（ピルチャージ用）
-    hook.chargeTicks++;
+    // 初回巻き取りが開始された後のみ経過tickをカウント（ピルチャージ用）
+    if (hook.hasStartedWinding) {
+      hook.chargeTicks++;
+    }
 
     // プレイヤーの視界を遮らないよう、目の高さ直下ではなく手元・胸元の位置から伸ばす
     const playerPos: Vector3 = {
@@ -326,56 +344,59 @@ export function updateManualHookshots(): void {
         vel = player.getVelocity();
       } catch {}
 
-      // 巻き取り開始の瞬間（sneakTickCounter === 0）に下方向の落下速度が規定値以上ならリセット＆爆発エフェクト（ピルとは完全分離）
-      const downwardSpeed = -vel.y;
-      if (
-        hook.sneakTickCounter === 0 &&
-        MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_ON_WIND_START &&
-        downwardSpeed >= MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_THRESHOLD
-      ) {
-        try {
-          player.applyImpulse({ x: 0, y: -vel.y, z: 0 });
+      // 最初の一回目の巻き取り開始時のみ判定（1回の着弾につき1回のみ発動可能）
+      if (!hook.hasStartedWinding) {
+        hook.hasStartedWinding = true;
 
-          // 爆風エフェクトと音のインターバル判定（約1秒間は再度エフェクト・サウンドを出さない）
-          const lastEffectTick = lastWindStartEffectTickMap.get(player.id) ?? -9999;
-          if (
-            system.currentTick - lastEffectTick >=
-            MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_INTERVAL_TICKS
-          ) {
-            lastWindStartEffectTickMap.set(player.id, system.currentTick);
+        const downwardSpeed = -vel.y;
+        if (
+          MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_ON_WIND_START &&
+          downwardSpeed >= MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_THRESHOLD
+        ) {
+          try {
+            player.applyImpulse({ x: 0, y: -vel.y, z: 0 });
 
-            // 爆発エフェクトとサウンドの発生
-            const feetPos = {
-              x: player.location.x,
-              y: player.location.y + 0.2,
-              z: player.location.z,
-            };
-            player.dimension.spawnParticle(
-              MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_PARTICLE,
-              feetPos,
-            );
-            try {
-              player.dimension.spawnParticle("minecraft:wind_explosion_emitter", feetPos);
-            } catch {}
+            // 爆風エフェクトと音のインターバル判定（約1秒間は再度エフェクト・サウンドを出さない）
+            const lastEffectTick = lastWindStartEffectTickMap.get(player.id) ?? -9999;
+            if (
+              system.currentTick - lastEffectTick >=
+              MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_INTERVAL_TICKS
+            ) {
+              lastWindStartEffectTickMap.set(player.id, system.currentTick);
 
-            player.playSound(MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND, {
-              pitch: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_PITCH,
-              volume: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_VOLUME,
-            });
-          }
+              // 爆発エフェクトとサウンドの発生
+              const feetPos = {
+                x: player.location.x,
+                y: player.location.y + 0.2,
+                z: player.location.z,
+              };
+              player.dimension.spawnParticle(
+                MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_PARTICLE,
+                feetPos,
+              );
+              try {
+                player.dimension.spawnParticle("minecraft:wind_explosion_emitter", feetPos);
+              } catch {}
 
-          // リセット直後に短い低速落下の効果を与えて落下ダメージをリセット（パーティクル非表示）
-          if (MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET > 0) {
-            player.addEffect(
-              "slow_falling",
-              MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET,
-              {
-                showParticles: false,
-              },
-            );
-          }
-        } catch {}
-        vel.y = 0;
+              player.playSound(MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND, {
+                pitch: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_PITCH,
+                volume: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_VOLUME,
+              });
+            }
+
+            // リセット直後に短い低速落下の効果を与えて落下ダメージをリセット（パーティクル非表示）
+            if (MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET > 0) {
+              player.addEffect(
+                "slow_falling",
+                MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET,
+                {
+                  showParticles: false,
+                },
+              );
+            }
+          } catch {}
+          vel.y = 0;
+        }
       }
 
       if (distance > MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE) {

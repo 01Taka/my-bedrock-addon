@@ -1107,7 +1107,7 @@ function isHoldingManualHookshot(player) {
 }
 function getChargedPillCount(player) {
   const hook = playerHooks.get(player.id);
-  if (!hook) return 0;
+  if (!hook || !hook.hasStartedWinding) return 0;
   return Math.min(
     MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT,
     Math.floor(
@@ -1118,20 +1118,27 @@ function getChargedPillCount(player) {
 function updateManualHookshotHud(player) {
   if (!player.isValid) return;
   if (isHoldingManualHookshot(player) || playerHooks.has(player.id)) {
+    const hook = playerHooks.get(player.id);
+    if (hook && !hook.hasStartedWinding) {
+      player.onScreenDisplay.setActionBar("\xA76(\u25B0\u25B0\u25B0)");
+      return;
+    }
     const pills = getChargedPillCount(player);
     const maxPills = MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
     const activeColor = player.isOnGround ? "\xA72" : "\xA7a";
     let canHitWall = false;
-    try {
-      const blockHit = player.getBlockFromViewDirection({
-        maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-        includePassableBlocks: false,
-        includeLiquidBlocks: false
-      });
-      canHitWall = blockHit !== void 0;
-    } catch {
+    if (!hook) {
+      try {
+        const blockHit = player.getBlockFromViewDirection({
+          maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+          includePassableBlocks: false,
+          includeLiquidBlocks: false
+        });
+        canHitWall = blockHit !== void 0;
+      } catch {
+      }
     }
-    const emptyColor = canHitWall ? "\xA77" : "\xA78";
+    const emptyColor = hook || canHitWall ? "\xA77" : "\xA78";
     if (pills >= maxPills) {
       player.onScreenDisplay.setActionBar(`${activeColor}(\u25B0\u25B0\u25B0)`);
     } else if (pills === 0) {
@@ -1147,7 +1154,7 @@ function updateManualHookshotHud(player) {
 function resetHook(player, notify = true, isManualRelease = false) {
   const hook = playerHooks.get(player.id);
   if (!hook) return;
-  const canReleaseBlast = Math.floor(
+  const canReleaseBlast = hook.hasStartedWinding && Math.floor(
     hook.chargeTicks / MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_TICKS_PER_PILL
   ) >= MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
   playerHooks.delete(player.id);
@@ -1236,6 +1243,7 @@ function handleManualHookshotUse(event, cancelCallback) {
     playerHooks.set(player.id, {
       hitPos,
       sneakTickCounter: 0,
+      hasStartedWinding: false,
       chargeTicks: 0
     });
     try {
@@ -1255,7 +1263,9 @@ function updateManualHookshots() {
     const dimension = player.dimension;
     const hitPos = hook.hitPos;
     const headPos = player.getHeadLocation();
-    hook.chargeTicks++;
+    if (hook.hasStartedWinding) {
+      hook.chargeTicks++;
+    }
     const playerPos = {
       x: headPos.x,
       y: headPos.y - 0.4,
@@ -1287,43 +1297,46 @@ function updateManualHookshots() {
         vel = player.getVelocity();
       } catch {
       }
-      const downwardSpeed = -vel.y;
-      if (hook.sneakTickCounter === 0 && MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_ON_WIND_START && downwardSpeed >= MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_THRESHOLD) {
-        try {
-          player.applyImpulse({ x: 0, y: -vel.y, z: 0 });
-          const lastEffectTick = lastWindStartEffectTickMap.get(player.id) ?? -9999;
-          if (system5.currentTick - lastEffectTick >= MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_INTERVAL_TICKS) {
-            lastWindStartEffectTickMap.set(player.id, system5.currentTick);
-            const feetPos = {
-              x: player.location.x,
-              y: player.location.y + 0.2,
-              z: player.location.z
-            };
-            player.dimension.spawnParticle(
-              MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_PARTICLE,
-              feetPos
-            );
-            try {
-              player.dimension.spawnParticle("minecraft:wind_explosion_emitter", feetPos);
-            } catch {
-            }
-            player.playSound(MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND, {
-              pitch: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_PITCH,
-              volume: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_VOLUME
-            });
-          }
-          if (MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET > 0) {
-            player.addEffect(
-              "slow_falling",
-              MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET,
-              {
-                showParticles: false
+      if (!hook.hasStartedWinding) {
+        hook.hasStartedWinding = true;
+        const downwardSpeed = -vel.y;
+        if (MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_ON_WIND_START && downwardSpeed >= MANUAL_HOOKSHOT_CONFIG.RESET_DOWNWARD_VELOCITY_THRESHOLD) {
+          try {
+            player.applyImpulse({ x: 0, y: -vel.y, z: 0 });
+            const lastEffectTick = lastWindStartEffectTickMap.get(player.id) ?? -9999;
+            if (system5.currentTick - lastEffectTick >= MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_INTERVAL_TICKS) {
+              lastWindStartEffectTickMap.set(player.id, system5.currentTick);
+              const feetPos = {
+                x: player.location.x,
+                y: player.location.y + 0.2,
+                z: player.location.z
+              };
+              player.dimension.spawnParticle(
+                MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_PARTICLE,
+                feetPos
+              );
+              try {
+                player.dimension.spawnParticle("minecraft:wind_explosion_emitter", feetPos);
+              } catch {
               }
-            );
+              player.playSound(MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND, {
+                pitch: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_PITCH,
+                volume: MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_SOUND_VOLUME
+              });
+            }
+            if (MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET > 0) {
+              player.addEffect(
+                "slow_falling",
+                MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_RESET,
+                {
+                  showParticles: false
+                }
+              );
+            }
+          } catch {
           }
-        } catch {
+          vel.y = 0;
         }
-        vel.y = 0;
       }
       if (distance > MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE) {
         const nx = dx / distance;

@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "Hookshot Addon BP v4",
+    "name": "Hookshot Addon BP v5",
     "description": "Hookshot & Blast Jump Addon",
     "uuid": "4c39463e-7ac3-45f6-aa79-5b726ed7e2a3",
     "version": [
       1,
       0,
-      4
+      5
     ],
     "min_engine_version": [
       1,
@@ -24,7 +24,7 @@
       "version": [
         1,
         0,
-        4
+        5
       ],
       "entry": "scripts/index.js"
     }
@@ -35,7 +35,7 @@
       "version": [
         1,
         0,
-        4
+        5
       ]
     },
     {
