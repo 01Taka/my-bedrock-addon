@@ -7,9 +7,11 @@ import {
   InputButton,
   ButtonState,
   EquipmentSlot,
+  Entity,
 } from "@minecraft/server";
 import { MANUAL_HOOKSHOT_CONFIG } from "./config";
 import { isAutoSneakEnabled } from "../settings";
+import { isHeavyEntity, isValidHookshotTarget } from "../hookshot";
 
 /**
  * プレイヤーが物理的にスニーク（シフト）キーを押下しているかを判定
@@ -36,6 +38,8 @@ function isSneakButtonPressed(player: Player): boolean {
  */
 interface PlayerHookState {
   hitPos: Vector3;
+  targetEntity?: Entity;
+  dimensionId: string;
   sneakTickCounter: number;
   /** 初回の巻き取りが開始されたか（巻き取り開始時の落下軽減権利の判定およびピルチャージ開始トリガー） */
   hasStartedWinding: boolean;
@@ -108,21 +112,32 @@ export function updateManualHookshotHud(player: Player): void {
     // 着地中で実際には爆発とインパルスが発生しない場合はグレーっぽい薄緑(§2)、空中で発動可能な場合は鮮やかな緑(§a)
     const activeColor = player.isOnGround ? "§2" : "§a";
 
-    // 射程内で壁に着弾可能か判定（未着弾時の空ピル色用）
-    let canHitWall = false;
+    // 射程内で壁または大型モブに着弾可能か判定（未着弾時の空ピル色用）
+    let canHitTarget = false;
     if (!hook) {
       try {
-        const blockHit = player.getBlockFromViewDirection({
+        const entityHits = player.getEntitiesFromViewDirection({
           maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-          includePassableBlocks: false,
-          includeLiquidBlocks: false,
         });
-        canHitWall = blockHit !== undefined;
+        for (const hit of entityHits) {
+          if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
+            canHitTarget = true;
+            break;
+          }
+        }
+        if (!canHitTarget) {
+          const blockHit = player.getBlockFromViewDirection({
+            maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+            includePassableBlocks: false,
+            includeLiquidBlocks: false,
+          });
+          canHitTarget = blockHit !== undefined;
+        }
       } catch {}
     }
 
-    // 空ピルの色: 着弾中または射程内で壁に当たる時は明るい灰色(§7)、射程外や壁がない時は暗灰色(§8)
-    const emptyColor = hook || canHitWall ? "§7" : "§8";
+    // 空ピルの色: 着弾中または射程内で壁/大型モブに当たる時は明るい灰色(§7)、射程外や対象がない時は暗灰色(§8)
+    const emptyColor = hook || canHitTarget ? "§7" : "§8";
 
     if (pills >= maxPills) {
       // 3つ満タン（着地中はグレーっぽい薄緑、空中で発動可能な場合は鮮やかな緑）
@@ -243,36 +258,74 @@ export function handleManualHookshotUse(
       return;
     }
 
-    // 即時レイキャストで着弾判定（弾速無限）
+    const maxDistance = MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE;
+    const playerPos = player.location;
+
+    // 1. 視線方向のエンティティレイキャスト（大型モブ判定）
+    const entityHits = player.getEntitiesFromViewDirection({
+      maxDistance,
+    });
+    let closestHeavyEntityHit: { entity: Entity; distance: number } | null = null;
+    for (const hit of entityHits) {
+      if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
+        closestHeavyEntityHit = hit;
+        break; // getEntitiesFromViewDirection は距離順
+      }
+    }
+
+    // 2. 視線方向のブロックレイキャスト
     const blockHit = player.getBlockFromViewDirection({
-      maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+      maxDistance,
       includePassableBlocks: false,
       includeLiquidBlocks: false,
     });
 
-    if (!blockHit) {
+    let blockDistance = Number.POSITIVE_INFINITY;
+    let blockHitPos: Vector3 | null = null;
+
+    if (blockHit) {
+      const blockLoc = blockHit.block.location;
+      blockHitPos = blockHit.faceLocation
+        ? {
+            x: blockLoc.x + blockHit.faceLocation.x,
+            y: blockLoc.y + blockHit.faceLocation.y,
+            z: blockLoc.z + blockHit.faceLocation.z,
+          }
+        : {
+            x: blockLoc.x + 0.5,
+            y: blockLoc.y + 0.5,
+            z: blockLoc.z + 0.5,
+          };
+      blockDistance = Math.hypot(
+        blockHitPos.x - playerPos.x,
+        blockHitPos.y - playerPos.y,
+        blockHitPos.z - playerPos.z,
+      );
+    }
+
+    let hitPos: Vector3 | null = null;
+    let targetEntity: Entity | undefined = undefined;
+
+    // 大型モブがブロックより手前にある場合
+    if (closestHeavyEntityHit && closestHeavyEntityHit.distance < blockDistance) {
+      targetEntity = closestHeavyEntityHit.entity;
+      hitPos = targetEntity.getHeadLocation ? targetEntity.getHeadLocation() : targetEntity.location;
+    } else if (blockHitPos) {
+      hitPos = blockHitPos;
+    }
+
+    if (!hitPos) {
       try {
         player.playSound("note.bass", { pitch: 0.6, volume: 0.8 });
       } catch {}
       return;
     }
 
-    const blockLoc = blockHit.block.location;
-    const hitPos: Vector3 = blockHit.faceLocation
-      ? {
-          x: blockLoc.x + blockHit.faceLocation.x,
-          y: blockLoc.y + blockHit.faceLocation.y,
-          z: blockLoc.z + blockHit.faceLocation.z,
-        }
-      : {
-          x: blockLoc.x + 0.5,
-          y: blockLoc.y + 0.5,
-          z: blockLoc.z + 0.5,
-        };
-
     // フックを着弾状態として記録
     playerHooks.set(player.id, {
       hitPos,
+      targetEntity,
+      dimensionId: player.dimension.id,
       sneakTickCounter: 0,
       hasStartedWinding: false,
       chargeTicks: 0,
@@ -297,6 +350,33 @@ export function updateManualHookshots(): void {
     }
 
     const dimension = player.dimension;
+
+    // プレイヤーのディメンションが変わっている場合はフック解除
+    if (dimension.id !== hook.dimensionId) {
+      resetHook(player, false, false);
+      continue;
+    }
+
+    // 対象エンティティが存在する場合、その最新座標に追従
+    if (hook.targetEntity) {
+      if (
+        !hook.targetEntity.isValid ||
+        hook.targetEntity.dimension.id !== dimension.id
+      ) {
+        // 対象モブが消滅・死亡・別ディメンションへ移動した場合はフック解除
+        resetHook(player, true, false);
+        continue;
+      }
+      try {
+        hook.hitPos = hook.targetEntity.getHeadLocation
+          ? hook.targetEntity.getHeadLocation()
+          : hook.targetEntity.location;
+      } catch {
+        resetHook(player, true, false);
+        continue;
+      }
+    }
+
     const hitPos = hook.hitPos;
     const headPos = player.getHeadLocation();
 
@@ -399,7 +479,11 @@ export function updateManualHookshots(): void {
         }
       }
 
-      if (distance > MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE) {
+      const stopDistance = hook.targetEntity
+        ? Math.max(MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE, 2.5)
+        : MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE;
+
+      if (distance > stopDistance) {
         const nx = dx / distance;
         const ny = dy / distance;
         const nz = dz / distance;
@@ -475,9 +559,31 @@ export function initManualHookshot(): void {
     const dead = event.deadEntity;
     if (dead instanceof Player) {
       if (playerHooks.has(dead.id)) {
-        resetHook(dead, false);
+        resetHook(dead, false, false);
       }
       lastWindStartEffectTickMap.delete(dead.id);
+    }
+  });
+
+  // ディメンション変更時（ネザー/エンドポータル通過やテレポート時など）にフックを解除
+  world.afterEvents.playerDimensionChange.subscribe((event) => {
+    const player = event.player;
+    if (player && player.isValid) {
+      if (playerHooks.has(player.id)) {
+        resetHook(player, false, false);
+      }
+      lastWindStartEffectTickMap.delete(player.id);
+    }
+  });
+
+  // リスポーン時・スポーン時にフック状態を確実にクリーンアップ
+  world.afterEvents.playerSpawn.subscribe((event) => {
+    const player = event.player;
+    if (player && player.isValid) {
+      if (playerHooks.has(player.id)) {
+        resetHook(player, false, false);
+      }
+      lastWindStartEffectTickMap.delete(player.id);
     }
   });
 }

@@ -1126,19 +1126,30 @@ function updateManualHookshotHud(player) {
     const pills = getChargedPillCount(player);
     const maxPills = MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
     const activeColor = player.isOnGround ? "\xA72" : "\xA7a";
-    let canHitWall = false;
+    let canHitTarget = false;
     if (!hook) {
       try {
-        const blockHit = player.getBlockFromViewDirection({
-          maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-          includePassableBlocks: false,
-          includeLiquidBlocks: false
+        const entityHits = player.getEntitiesFromViewDirection({
+          maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE
         });
-        canHitWall = blockHit !== void 0;
+        for (const hit of entityHits) {
+          if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
+            canHitTarget = true;
+            break;
+          }
+        }
+        if (!canHitTarget) {
+          const blockHit = player.getBlockFromViewDirection({
+            maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+            includePassableBlocks: false,
+            includeLiquidBlocks: false
+          });
+          canHitTarget = blockHit !== void 0;
+        }
       } catch {
       }
     }
-    const emptyColor = hook || canHitWall ? "\xA77" : "\xA78";
+    const emptyColor = hook || canHitTarget ? "\xA77" : "\xA78";
     if (pills >= maxPills) {
       player.onScreenDisplay.setActionBar(`${activeColor}(\u25B0\u25B0\u25B0)`);
     } else if (pills === 0) {
@@ -1218,30 +1229,61 @@ function handleManualHookshotUse(event, cancelCallback) {
       resetHook(player, true, true);
       return;
     }
+    const maxDistance = MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE;
+    const playerPos = player.location;
+    const entityHits = player.getEntitiesFromViewDirection({
+      maxDistance
+    });
+    let closestHeavyEntityHit = null;
+    for (const hit of entityHits) {
+      if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
+        closestHeavyEntityHit = hit;
+        break;
+      }
+    }
     const blockHit = player.getBlockFromViewDirection({
-      maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+      maxDistance,
       includePassableBlocks: false,
       includeLiquidBlocks: false
     });
-    if (!blockHit) {
+    let blockDistance = Number.POSITIVE_INFINITY;
+    let blockHitPos = null;
+    if (blockHit) {
+      const blockLoc = blockHit.block.location;
+      blockHitPos = blockHit.faceLocation ? {
+        x: blockLoc.x + blockHit.faceLocation.x,
+        y: blockLoc.y + blockHit.faceLocation.y,
+        z: blockLoc.z + blockHit.faceLocation.z
+      } : {
+        x: blockLoc.x + 0.5,
+        y: blockLoc.y + 0.5,
+        z: blockLoc.z + 0.5
+      };
+      blockDistance = Math.hypot(
+        blockHitPos.x - playerPos.x,
+        blockHitPos.y - playerPos.y,
+        blockHitPos.z - playerPos.z
+      );
+    }
+    let hitPos = null;
+    let targetEntity = void 0;
+    if (closestHeavyEntityHit && closestHeavyEntityHit.distance < blockDistance) {
+      targetEntity = closestHeavyEntityHit.entity;
+      hitPos = targetEntity.getHeadLocation ? targetEntity.getHeadLocation() : targetEntity.location;
+    } else if (blockHitPos) {
+      hitPos = blockHitPos;
+    }
+    if (!hitPos) {
       try {
         player.playSound("note.bass", { pitch: 0.6, volume: 0.8 });
       } catch {
       }
       return;
     }
-    const blockLoc = blockHit.block.location;
-    const hitPos = blockHit.faceLocation ? {
-      x: blockLoc.x + blockHit.faceLocation.x,
-      y: blockLoc.y + blockHit.faceLocation.y,
-      z: blockLoc.z + blockHit.faceLocation.z
-    } : {
-      x: blockLoc.x + 0.5,
-      y: blockLoc.y + 0.5,
-      z: blockLoc.z + 0.5
-    };
     playerHooks.set(player.id, {
       hitPos,
+      targetEntity,
+      dimensionId: player.dimension.id,
       sneakTickCounter: 0,
       hasStartedWinding: false,
       chargeTicks: 0
@@ -1261,6 +1303,22 @@ function updateManualHookshots() {
       continue;
     }
     const dimension = player.dimension;
+    if (dimension.id !== hook.dimensionId) {
+      resetHook(player, false, false);
+      continue;
+    }
+    if (hook.targetEntity) {
+      if (!hook.targetEntity.isValid || hook.targetEntity.dimension.id !== dimension.id) {
+        resetHook(player, true, false);
+        continue;
+      }
+      try {
+        hook.hitPos = hook.targetEntity.getHeadLocation ? hook.targetEntity.getHeadLocation() : hook.targetEntity.location;
+      } catch {
+        resetHook(player, true, false);
+        continue;
+      }
+    }
     const hitPos = hook.hitPos;
     const headPos = player.getHeadLocation();
     if (hook.hasStartedWinding) {
@@ -1338,7 +1396,8 @@ function updateManualHookshots() {
           vel.y = 0;
         }
       }
-      if (distance > MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE) {
+      const stopDistance = hook.targetEntity ? Math.max(MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE, 2.5) : MANUAL_HOOKSHOT_CONFIG.STOP_DISTANCE;
+      if (distance > stopDistance) {
         const nx = dx / distance;
         const ny = dy / distance;
         const nz = dz / distance;
@@ -1388,9 +1447,27 @@ function initManualHookshot() {
     const dead = event.deadEntity;
     if (dead instanceof Player6) {
       if (playerHooks.has(dead.id)) {
-        resetHook(dead, false);
+        resetHook(dead, false, false);
       }
       lastWindStartEffectTickMap.delete(dead.id);
+    }
+  });
+  world2.afterEvents.playerDimensionChange.subscribe((event) => {
+    const player = event.player;
+    if (player && player.isValid) {
+      if (playerHooks.has(player.id)) {
+        resetHook(player, false, false);
+      }
+      lastWindStartEffectTickMap.delete(player.id);
+    }
+  });
+  world2.afterEvents.playerSpawn.subscribe((event) => {
+    const player = event.player;
+    if (player && player.isValid) {
+      if (playerHooks.has(player.id)) {
+        resetHook(player, false, false);
+      }
+      lastWindStartEffectTickMap.delete(player.id);
     }
   });
 }
