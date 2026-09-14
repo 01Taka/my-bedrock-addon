@@ -4,8 +4,14 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "esbuild src/index.ts --bundle --outfile=behavior_pack/scripts/index.js --format=esm --external:@minecraft/server --external:@minecraft/server-ui",
-    "pack": "npm run build && node scripts/pack.js"
+    "build": "npm run build:all",
+    "build:hookshot": "npm --prefix hookshot_addon run build",
+    "build:utility": "npm --prefix mining_utility_addon run build",
+    "build:all": "npm run build:hookshot && npm run build:utility",
+    "pack:hookshot": "npm --prefix hookshot_addon run pack",
+    "pack:utility": "npm --prefix mining_utility_addon run pack",
+    "pack:all": "npm run pack:hookshot && npm run pack:utility",
+    "pack": "npm run pack:all"
   },
   "keywords": [],
   "author": "",

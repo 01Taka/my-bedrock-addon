@@ -1,0 +1,50 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Hookshot Addon BP v2",
+    "description": "Hookshot & Blast Jump Addon",
+    "uuid": "4c39463e-7ac3-45f6-aa79-5b726ed7e2a3",
+    "version": [
+      1,
+      0,
+      2
+    ],
+    "min_engine_version": [
+      1,
+      20,
+      80
+    ]
+  },
+  "modules": [
+    {
+      "description": "Script Module",
+      "type": "script",
+      "language": "javascript",
+      "uuid": "7f25857e-4c70-4f33-bc9c-ce7a6a5bd0e2",
+      "version": [
+        1,
+        0,
+        2
+      ],
+      "entry": "scripts/index.js"
+    }
+  ],
+  "dependencies": [
+    {
+      "uuid": "001dc587-d7a2-446f-8352-c4f34dfc08e7",
+      "version": [
+        1,
+        0,
+        2
+      ]
+    },
+    {
+      "module_name": "@minecraft/server",
+      "version": "1.10.0"
+    },
+    {
+      "module_name": "@minecraft/server-ui",
+      "version": "1.3.0"
+    }
+  ]
+}

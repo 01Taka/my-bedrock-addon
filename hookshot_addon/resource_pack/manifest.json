@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "My Script Addon Resources v160",
-    "description": "Resource Pack for My Addon",
-    "uuid": "beaaa008-3273-4f2d-8c2e-011fd9ddb6b1",
+    "name": "Hookshot Addon RP v2",
+    "description": "Resource Pack for Hookshot Addon",
+    "uuid": "001dc587-d7a2-446f-8352-c4f34dfc08e7",
     "version": [
       1,
       0,
-      160
+      2
     ],
     "min_engine_version": [
       1,
@@ -19,11 +19,11 @@
     {
       "description": "Resource Pack Module",
       "type": "resources",
-      "uuid": "05ee8445-3d43-4f09-b179-5cbe4dbb993e",
+      "uuid": "0e639ccc-7e07-4f0f-acd0-c6246e0b7132",
       "version": [
         1,
         0,
-        160
+        2
       ]
     }
   ]

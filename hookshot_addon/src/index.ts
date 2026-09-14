@@ -3,28 +3,9 @@ import {
   system,
   InputButton,
   ButtonState,
-  Player,
 } from "@minecraft/server";
 import {
-  ORE_BLOCK_IDS,
-  oreMassDestruction,
-  treeMassDestruction,
-} from "./mass-destruction";
-import { handleTorchSwap } from "./offhand-touch";
-import {
-  handleGraveEntityDie,
-  handleGraveBeforeInteract,
-  handleGraveBeforeBreak,
-  handleGravePlayerSpawn,
-} from "./grave";
-import {
-  handleSettingsScriptEvent,
-  handleSettingsItemUse,
-} from "./settings";
-import {
   handleHookshotUse,
-  executeBlastJump,
-  resetBlastJump,
   updateBlastHud,
   handleBlastJumpButtonInput,
   handlePlayerGroundTouch,
@@ -35,43 +16,19 @@ import {
   isHoldingHookshot,
 } from "./hookshot";
 import { initManualHookshot } from "./manual-hookshot";
+import { handleSettingsScriptEvent } from "./settings";
 
 // 初期化
 system.run(() => {
-  try {
-    world.gameRules.keepInventory = true;
-  } catch {}
-  console.warn("§a[Addon] アドオンスクリプトが正常にロードされました。");
+  console.warn("§a[Hookshot Addon] フックショットアドオンが正常にロードされました。");
 });
 
 // 手動巻取り式フックショットの初期化
 initManualHookshot();
 
-// プレイヤー復活時の座標メモ紙付与
-world.afterEvents.playerSpawn.subscribe((event) => {
-  handleGravePlayerSpawn(event);
-});
-
-// クリエイティブでの墓石誤破壊防止
-world.beforeEvents.playerBreakBlock.subscribe((event) => {
-  handleGraveBeforeBreak(event);
-});
-
-// ブロック一括破壊
-world.afterEvents.playerBreakBlock.subscribe((event) => {
-  oreMassDestruction(event, ORE_BLOCK_IDS);
-  treeMassDestruction(event);
-});
-
-// アイテム使用 (たいまつ持ち替え / 設定UI表示 / フックショット)
+// アイテム使用 (フックショット)
 world.beforeEvents.itemUse.subscribe((event) => {
   handleHookshotUse(event, () => {
-    event.cancel = true;
-  });
-  handleSettingsItemUse(event, () => {
-    event.cancel = true;
-  });
-  handleTorchSwap(event.source, () => {
     event.cancel = true;
   });
 });
@@ -86,7 +43,7 @@ try {
   // 実験的機能が無効な環境ではスキップ
 }
 
-// ダメージ判定前（爆風ジャンプ後の2秒間は落下ダメージ無効化）
+// ダメージ判定前（爆風ジャンプ後の落下ダメージ無効化）
 world.beforeEvents.entityHurt.subscribe((event) => {
   handleBlastJumpDamage(event);
 });
@@ -128,22 +85,11 @@ system.runInterval(() => {
   }
 }, 2);
 
-// 死亡検知
-world.afterEvents.entityDie.subscribe((event) => {
-  handleGraveEntityDie(event);
-});
-
-// 墓石の右クリック回収
-world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
-  handleGraveBeforeInteract(event);
-});
-
-// スクリプトイベントコマンド (/scriptevent addon:...)
+// スクリプトイベントコマンド (/scriptevent hookshot:... /scriptevent addon:autosneak)
 system.afterEvents.scriptEventReceive.subscribe((event) => {
   try {
     handleSettingsScriptEvent(event);
   } catch (error) {
-    console.error("スクリプトイベント処理エラー:", error);
+    console.error("フックショット設定イベント処理エラー:", error);
   }
 });
-
