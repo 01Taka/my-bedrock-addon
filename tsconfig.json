@@ -4,8 +4,10 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
-    "outDir": "./behavior_pack/scripts",
-    "rootDir": "./src"
+    "skipLibCheck": true
   },
-  "include": ["src/**/*"]
+  "include": [
+    "hookshot_addon/src/**/*",
+    "mining_utility_addon/src/**/*"
+  ]
 }
