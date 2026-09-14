@@ -1,5 +1,5 @@
 {
-  "name": "hookshot-addon",
+  "name": "manual-hookshot-addon",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -9,7 +9,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "Hookshot & Blast Jump Addon for Minecraft Bedrock",
+  "description": "Manual Hookshot Addon for Minecraft Bedrock",
   "dependencies": {
     "@minecraft/math": "^2.4.0",
     "@minecraft/server": "^2.9.0",

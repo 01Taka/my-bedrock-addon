@@ -50,7 +50,7 @@ export function isSettingEnabled(
 }
 
 /**
- * プレイヤーのフックショット常時スニーク（常時巻取り）設定を取得（未設定時はデフォルト false）
+ * プレイヤーの手動巻取りフックショット常時スニーク（常時巻取り）設定を取得（未設定時はデフォルト false）
  */
 export function isAutoSneakEnabled(player: Player): boolean {
   return isSettingEnabled(player, SETTING_KEYS.AUTO_SNEAK, false);
@@ -79,8 +79,8 @@ export function showSettingsForm(player: Player): void {
   const currentAutoSneak = isAutoSneakEnabled(player);
 
   const form = new ModalFormData();
-  form.title("§l§6フックショット設定");
-  form.toggle("フックショット常時巻取り (Switch等の操作補助)", {
+  form.title("§l§6手動巻取りフックショット設定");
+  form.toggle("常時巻取り (Switch等の操作補助)", {
     defaultValue: currentAutoSneak,
   });
 
@@ -96,8 +96,8 @@ export function showSettingsForm(player: Player): void {
 
       player.sendMessage(
         `§a============================\n` +
-          `§6【フックショット設定を更新しました】\n` +
-          `§f・フックショット常時巻取り: ${statusText(autoSneakVal)}\n` +
+          `§6【手動巻取りフックショット設定を更新しました】\n` +
+          `§f・常時巻取り: ${statusText(autoSneakVal)}\n` +
           `§a============================`,
       );
     })
@@ -109,8 +109,10 @@ export function showSettingsForm(player: Player): void {
 /**
  * /scriptevent による設定変更・UI表示ハンドラー
  * 対応形式:
- * - /scriptevent hookshot:autosneak [on|off]
- * - /scriptevent hookshot:menu
+ * - /scriptevent manual_hookshot:autosneak [on|off]
+ * - /scriptevent manual_hookshot:menu
+ * - /scriptevent hookshot:autosneak (互換用)
+ * - /scriptevent hookshot:menu (互換用)
  * - /scriptevent addon:autosneak (互換用)
  */
 export function handleSettingsScriptEvent(
@@ -123,7 +125,17 @@ export function handleSettingsScriptEvent(
   let cmd = "";
   let arg = "";
 
-  if (rawId.startsWith("hookshot:")) {
+  if (rawId.startsWith("manual_hookshot:")) {
+    cmd = rawId.substring(16).trim();
+    arg = rawMsg;
+  } else if (rawId.startsWith("manualhookshot:")) {
+    cmd = rawId.substring(15).trim();
+    arg = rawMsg;
+  } else if (rawId === "manual_hookshot" || rawId === "manualhookshot") {
+    const parts = rawMsg.split(/\s+/);
+    cmd = parts[0] || "";
+    arg = parts.slice(1).join(" ").trim();
+  } else if (rawId.startsWith("hookshot:")) {
     cmd = rawId.substring(9).trim();
     arg = rawMsg;
   } else if (rawId === "hookshot") {
@@ -142,7 +154,7 @@ export function handleSettingsScriptEvent(
     arg = rawMsg;
   }
 
-  // hookshotに関係のないコマンドは無視
+  // 関係のないコマンドは無視
   const validCmds = ["menu", "setting", "settings", "config", "ui", "autosneak", "auto_sneak", "sneak", "status", "help"];
   if (!validCmds.includes(cmd)) {
     return;
@@ -206,12 +218,12 @@ export function handleSettingsScriptEvent(
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {}
         p.sendMessage(
-          `§6[フックショット設定] 常時巻取り を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+          `§6[手動巻取りフックショット設定] 常時巻取り を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
         );
       }
       if (isServerSource) {
         world.sendMessage(
-          `§6[フックショット設定] 常時巻取り を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+          `§6[手動巻取りフックショット設定] 常時巻取り を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
         );
       }
       break;
@@ -222,9 +234,9 @@ export function handleSettingsScriptEvent(
       const statusText = (val: boolean) => (val ? "§a[ON]§r" : "§c[OFF]§r");
       const statusMsg =
         `§a============================\n` +
-          `§6【フックショット設定】\n` +
+          `§6【手動巻取りフックショット設定】\n` +
           `§f・常時巻取り: ${statusText(autoSneak)}\n` +
-          `§7(/scriptevent hookshot:menu で設定画面を開く)\n` +
+          `§7(/scriptevent manual_hookshot:menu で設定画面を開く)\n` +
           `§a============================`;
       for (const p of targets) {
         p.sendMessage(statusMsg);
@@ -238,10 +250,10 @@ export function handleSettingsScriptEvent(
     case "help": {
       const helpMsg =
         `§a============================\n` +
-          `§6【フックショット コマンド一覧】\n` +
-          `§f・/scriptevent hookshot:menu : 設定画面を開く\n` +
-          `・/scriptevent hookshot:autosneak : 常時巻取りのON/OFF切り替え\n` +
-          `・/scriptevent hookshot:status : 現在の設定状態を確認\n` +
+          `§6【手動巻取りフックショット コマンド一覧】\n` +
+          `§f・/scriptevent manual_hookshot:menu : 設定画面を開く\n` +
+          `・/scriptevent manual_hookshot:autosneak : 常時巻取りのON/OFF切り替え\n` +
+          `・/scriptevent manual_hookshot:status : 現在の設定状態を確認\n` +
           `§a============================`;
       for (const p of targets) {
         p.sendMessage(helpMsg);
@@ -255,11 +267,11 @@ export function handleSettingsScriptEvent(
 }
 
 /**
- * スニーク中にフックショット所持時などで設定を開く補助（必要に応じて）
+ * アイテム使用時の設定UI補助（必要に応じて）
  */
 export function handleSettingsItemUse(
   event: ItemUseBeforeEvent,
   cancelCallback: () => void,
 ): void {
-  // フックショット側では基本 /scriptevent hookshot:menu で開けるようにする
+  // 基本は /scriptevent manual_hookshot:menu で開ける
 }

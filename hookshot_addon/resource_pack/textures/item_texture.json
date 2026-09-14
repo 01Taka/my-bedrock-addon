@@ -2,9 +2,6 @@
   "resource_pack_name": "my_addon",
   "texture_name": "atlas.items",
   "texture_data": {
-    "hookshot": {
-      "textures": "textures/items/crossbow_standby"
-    },
     "manual_hookshot": {
       "textures": "textures/items/crossbow_standby"
     }

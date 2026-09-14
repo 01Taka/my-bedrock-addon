@@ -11,7 +11,7 @@ import {
 } from "@minecraft/server";
 import { MANUAL_HOOKSHOT_CONFIG } from "./config";
 import { isAutoSneakEnabled } from "../settings";
-import { isHeavyEntity, isValidHookshotTarget } from "../hookshot";
+import { isHeavyEntity, isValidHookshotTarget } from "./entities";
 
 /**
  * プレイヤーが物理的にスニーク（シフト）キーを押下しているかを判定

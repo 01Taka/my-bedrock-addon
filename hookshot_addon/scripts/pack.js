@@ -24,7 +24,7 @@ if (fs.existsSync(bpManifestPath)) {
       bpManifest.header.version[2] += 1;
       newVersion = bpManifest.header.version;
     }
-    console.log(`🔼 [Hookshot] バージョンを更新します: [${newVersion.join(', ')}]`);
+    console.log(`🔼 [Manual Hookshot] バージョンを更新します: [${newVersion.join(', ')}]`);
 
     if (bpManifest.header?.name) {
       if (/v\d+/i.test(bpManifest.header.name)) {
@@ -73,13 +73,13 @@ if (fs.existsSync(bpManifestPath)) {
     }
 
     fs.writeFileSync(bpManifestPath, JSON.stringify(bpManifest, null, 2), 'utf-8');
-    console.log('✅ [Hookshot] manifest.json を更新しました。');
+    console.log('✅ [Manual Hookshot] manifest.json を更新しました。');
   } catch (error) {
-    console.error('[Hookshot] manifest.json の更新中にエラーが発生しました:', error);
+    console.error('[Manual Hookshot] manifest.json の更新中にエラーが発生しました:', error);
     process.exit(1);
   }
 } else {
-  console.warn(`⚠️ [Hookshot] manifest.json が見つかりませんでした: ${bpManifestPath}`);
+  console.warn(`⚠️ [Manual Hookshot] manifest.json が見つかりませんでした: ${bpManifestPath}`);
 }
 
 // ----------------------------------------------------
@@ -121,14 +121,24 @@ function createMcAddon(bpSource, rpSource, outPath) {
 }
 
 async function buildPackages() {
-  console.log('📦 [Hookshot] パッケージング処理を開始します...');
+  console.log('📦 [Manual Hookshot] パッケージング処理を開始します...');
   try {
-    const mcaddonPath = path.join(distDir, 'Hookshot.mcaddon');
-    const bpPackPath = path.join(distDir, 'Hookshot_BP.mcpack');
-    const rpPackPath = path.join(distDir, 'Hookshot_RP.mcpack');
+    const mcaddonPath = path.join(distDir, 'ManualHookshot.mcaddon');
+    const bpPackPath = path.join(distDir, 'ManualHookshot_BP.mcpack');
+    const rpPackPath = path.join(distDir, 'ManualHookshot_RP.mcpack');
 
-    // 古いファイルを削除
-    [mcaddonPath, bpPackPath, rpPackPath].forEach((file) => {
+    // 古いファイルを削除（従来の Hookshot.* も含めクリーンアップ）
+    [
+      mcaddonPath,
+      bpPackPath,
+      rpPackPath,
+      path.join(distDir, 'Hookshot.mcaddon'),
+      path.join(distDir, 'Hookshot_BP.mcpack'),
+      path.join(distDir, 'Hookshot_RP.mcpack'),
+      path.join(localDistDir, 'Hookshot.mcaddon'),
+      path.join(localDistDir, 'Hookshot_BP.mcpack'),
+      path.join(localDistDir, 'Hookshot_RP.mcpack'),
+    ].forEach((file) => {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);
       }
@@ -147,26 +157,26 @@ async function buildPackages() {
 
     // localDistDir にもコピー
     [
-      [mcaddonPath, path.join(localDistDir, 'Hookshot.mcaddon')],
-      [bpPackPath, path.join(localDistDir, 'Hookshot_BP.mcpack')],
-      [rpPackPath, path.join(localDistDir, 'Hookshot_RP.mcpack')],
+      [mcaddonPath, path.join(localDistDir, 'ManualHookshot.mcaddon')],
+      [bpPackPath, path.join(localDistDir, 'ManualHookshot_BP.mcpack')],
+      [rpPackPath, path.join(localDistDir, 'ManualHookshot_RP.mcpack')],
     ].forEach(([src, dest]) => {
       if (fs.existsSync(src)) {
         fs.copyFileSync(src, dest);
       }
     });
 
-    console.log('\n🎉 [Hookshot] パッケージの生成が完了しました！');
+    console.log('\n🎉 [Manual Hookshot] パッケージの生成が完了しました！');
     if (fs.existsSync(mcaddonPath)) {
-      console.log(`👉 一括インポート用: dist/Hookshot.mcaddon`);
+      console.log(`👉 一括インポート用: dist/ManualHookshot.mcaddon`);
     }
-    console.log(`👉 個別インポート用: dist/Hookshot_BP.mcpack`);
+    console.log(`👉 個別インポート用: dist/ManualHookshot_BP.mcpack`);
     if (fs.existsSync(rpPackPath)) {
-      console.log(`👉 個別インポート用: dist/Hookshot_RP.mcpack`);
+      console.log(`👉 個別インポート用: dist/ManualHookshot_RP.mcpack`);
     }
     console.log('');
   } catch (error) {
-    console.error('[Hookshot] 圧縮中にエラーが発生しました:', error);
+    console.error('[Manual Hookshot] 圧縮中にエラーが発生しました:', error);
     process.exit(1);
   }
 }
