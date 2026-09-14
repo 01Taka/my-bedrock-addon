@@ -8,9 +8,7 @@
       }
     },
     "components": {
-      "minecraft:icon": {
-        "texture": "manual_hookshot"
-      },
+      "minecraft:icon": "manual_hookshot",
       "minecraft:display_name": {
         "value": "§b手動巻取りフックショット§r"
       },
