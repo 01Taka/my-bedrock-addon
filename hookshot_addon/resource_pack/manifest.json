@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "Manual Hookshot Addon RP v12",
+    "name": "Manual Hookshot Addon RP v14",
     "description": "Resource Pack for Manual Hookshot Addon",
     "uuid": "001dc587-d7a2-446f-8352-c4f34dfc08e7",
     "version": [
       1,
       0,
-      12
+      14
     ],
     "min_engine_version": [
       1,
@@ -23,7 +23,7 @@
       "version": [
         1,
         0,
-        12
+        14
       ]
     }
   ]

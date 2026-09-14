@@ -53,6 +53,9 @@ const playerHooks = new Map<string, PlayerHookState>();
 /** プレイヤーIDをキーにした前回巻き取り開始時爆風エフェクト発生tickマップ */
 const lastWindStartEffectTickMap = new Map<string, number>();
 
+/** 前回ピルHUDを表示したプレイヤーIDのセット（非表示時のアクションバー消去用） */
+const playersWithPillHud = new Set<string>();
+
 /**
  * プレイヤーがマニュアルフックショットを所持（メインハンドまたはオフハンド）しているか判定
  */
@@ -64,6 +67,20 @@ export function isHoldingManualHookshot(player: Player): boolean {
       if (mainhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
       const offhand = equippable.getEquipment(EquipmentSlot.Offhand);
       if (offhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
+    }
+  } catch {}
+  return false;
+}
+
+/**
+ * プレイヤーがマニュアルフックショットをメインハンドに持っているか判定
+ */
+export function isHoldingManualHookshotInMainhand(player: Player): boolean {
+  try {
+    const equippable = player.getComponent("minecraft:equippable");
+    if (equippable) {
+      const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
+      if (mainhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
     }
   } catch {}
   return false;
@@ -92,11 +109,15 @@ export function isReleaseBlastReady(player: Player): boolean {
 
 /**
  * アクションバーにピルの蓄積状況を示すテキストなしピルUIを表示
+ * （手に持っておらず、フックも刺さっていない場合はHUDをクリア）
  */
 export function updateManualHookshotHud(player: Player): void {
   if (!player.isValid) return;
 
-  if (isHoldingManualHookshot(player) || playerHooks.has(player.id)) {
+  const shouldShow = isHoldingManualHookshot(player) || playerHooks.has(player.id);
+
+  if (shouldShow) {
+    playersWithPillHud.add(player.id);
     const hook = playerHooks.get(player.id);
 
     // 1. 着弾中で、まだ最初の巻き取りが開始されていない場合:
@@ -152,6 +173,12 @@ export function updateManualHookshotHud(player: Player): void {
       const pillBar = activeColor + "▰".repeat(filled) + emptyColor + "▰".repeat(empty);
       player.onScreenDisplay.setActionBar(`§7(${pillBar}§7)`);
     }
+  } else if (playersWithPillHud.has(player.id)) {
+    // 手に持っておらず、かつフックも刺さっていない場合はピルHUDを非表示（クリア）
+    playersWithPillHud.delete(player.id);
+    try {
+      player.onScreenDisplay.setActionBar("");
+    } catch {}
   }
 }
 
@@ -233,6 +260,61 @@ export function resetHook(
       player.playSound("random.pop", { pitch: 1.2, volume: 0.8 });
     } catch {}
   }
+
+  // フック解除時、マニュアルフックショットを持っていなければHUDを即座に非表示（クリア）
+  if (!isHoldingManualHookshot(player) && playersWithPillHud.has(player.id)) {
+    playersWithPillHud.delete(player.id);
+    try {
+      player.onScreenDisplay.setActionBar("");
+    } catch {}
+  }
+}
+
+/**
+ * メインハンドにフックショットを持っていない状態で、着弾地点付近かつ着弾地点の方角を見て
+ * インタラクト（右クリック）した際にフックを解除できるか判定・実行
+ * @returns フックを解除した場合は true
+ */
+export function tryDetachHookOnInteract(player: Player): boolean {
+  if (!player.isValid) return false;
+
+  // フックが刺さっていない場合は対象外
+  const hook = playerHooks.get(player.id);
+  if (!hook) return false;
+
+  // メインハンドにフックショットを持っている場合は通常のアイテム使用処理に任せる
+  if (isHoldingManualHookshotInMainhand(player)) return false;
+
+  const headPos = player.getHeadLocation();
+  const hitPos = hook.hitPos;
+
+  const dx = hitPos.x - headPos.x;
+  const dy = hitPos.y - headPos.y;
+  const dz = hitPos.z - headPos.z;
+  const dist = Math.hypot(dx, dy, dz);
+
+  // 1. 距離判定（着弾地点付近か）
+  if (dist > MANUAL_HOOKSHOT_CONFIG.DETACH_REACH_DISTANCE) {
+    return false;
+  }
+
+  // 2. 方角判定（着弾地点の方角を見ているか）
+  // 至近距離（0.5ブロック未満）でない場合は視線と着弾点方向の内積をチェック
+  if (dist > 0.5) {
+    const viewDir = player.getViewDirection();
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const nz = dz / dist;
+    const dot = viewDir.x * nx + viewDir.y * ny + viewDir.z * nz;
+
+    if (dot < MANUAL_HOOKSHOT_CONFIG.DETACH_VIEW_ANGLE_COS) {
+      return false;
+    }
+  }
+
+  // フックを外して状態をリセット（手動解除 = true）
+  resetHook(player, true, true);
+  return true;
 }
 
 /**
@@ -539,11 +621,33 @@ export function updateManualHookshots(): void {
  * 手動巻取り式フックショットのイベントリスナーおよび更新ループを初期化
  */
 export function initManualHookshot(): void {
-  // アイテム使用イベント
+  // アイテム使用イベント（フックショット使用、および他アイテム所持時の着弾点インタラクト解除）
   world.beforeEvents.itemUse.subscribe((event) => {
+    // フックショット自体の使用処理
     handleManualHookshotUse(event, () => {
       event.cancel = true;
     });
+
+    // フックショット以外のアイテムを持って着弾点付近を見て使用した場合の手動解除
+    if (event.source instanceof Player) {
+      if (tryDetachHookOnInteract(event.source)) {
+        event.cancel = true;
+      }
+    }
+  });
+
+  // ブロックインタラクトイベント（素手または他アイテムで着弾点付近を右クリックした際のフック解除）
+  world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+    if (tryDetachHookOnInteract(event.player)) {
+      event.cancel = true;
+    }
+  });
+
+  // エンティティインタラクトイベント（着弾した大型モブ等付近を右クリックした際のフック解除）
+  world.beforeEvents.playerInteractWithEntity.subscribe((event) => {
+    if (tryDetachHookOnInteract(event.player)) {
+      event.cancel = true;
+    }
   });
 
   // 毎フレーム（1tick）更新ループ（移動インパルス & アクションバーHUD更新）
@@ -554,7 +658,7 @@ export function initManualHookshot(): void {
     }
   }, 1);
 
-  // プレイヤー死亡時にフック状態およびエフェクトタイマーをリセット
+  // プレイヤー死亡時にフック状態およびエフェクトタイマー、HUD状態をリセット
   world.afterEvents.entityDie.subscribe((event) => {
     const dead = event.deadEntity;
     if (dead instanceof Player) {
@@ -562,6 +666,7 @@ export function initManualHookshot(): void {
         resetHook(dead, false, false);
       }
       lastWindStartEffectTickMap.delete(dead.id);
+      playersWithPillHud.delete(dead.id);
     }
   });
 
@@ -573,6 +678,7 @@ export function initManualHookshot(): void {
         resetHook(player, false, false);
       }
       lastWindStartEffectTickMap.delete(player.id);
+      playersWithPillHud.delete(player.id);
     }
   });
 
@@ -584,6 +690,17 @@ export function initManualHookshot(): void {
         resetHook(player, false, false);
       }
       lastWindStartEffectTickMap.delete(player.id);
+      playersWithPillHud.delete(player.id);
+    }
+  });
+
+  // プレイヤー退出時
+  world.beforeEvents.playerLeave.subscribe((event) => {
+    const player = event.player;
+    if (player) {
+      playerHooks.delete(player.id);
+      lastWindStartEffectTickMap.delete(player.id);
+      playersWithPillHud.delete(player.id);
     }
   });
 }

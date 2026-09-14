@@ -67,7 +67,11 @@ var MANUAL_HOOKSHOT_CONFIG = {
   /** 解除時のサウンド音量 */
   RELEASE_SOUND_VOLUME: 0.6,
   /** 解除時のサウンドピッチ */
-  RELEASE_SOUND_PITCH: 1.8
+  RELEASE_SOUND_PITCH: 1.8,
+  /** メインハンド非所持時にフックを着弾点付近で手動解除できる最大距離（ブロック） */
+  DETACH_REACH_DISTANCE: 3,
+  /** メインハンド非所持時にフックを着弾点付近で手動解除する際の視線方向内積閾値（0.70で約45度以内） */
+  DETACH_VIEW_ANGLE_COS: 0.7
 };
 
 // src/settings.ts
@@ -319,6 +323,7 @@ function isSneakButtonPressed(player) {
 }
 var playerHooks = /* @__PURE__ */ new Map();
 var lastWindStartEffectTickMap = /* @__PURE__ */ new Map();
+var playersWithPillHud = /* @__PURE__ */ new Set();
 function isHoldingManualHookshot(player) {
   try {
     const equippable = player.getComponent("minecraft:equippable");
@@ -327,6 +332,17 @@ function isHoldingManualHookshot(player) {
       if (mainhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
       const offhand = equippable.getEquipment(EquipmentSlot.Offhand);
       if (offhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
+    }
+  } catch {
+  }
+  return false;
+}
+function isHoldingManualHookshotInMainhand(player) {
+  try {
+    const equippable = player.getComponent("minecraft:equippable");
+    if (equippable) {
+      const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
+      if (mainhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
     }
   } catch {
   }
@@ -344,7 +360,9 @@ function getChargedPillCount(player) {
 }
 function updateManualHookshotHud(player) {
   if (!player.isValid) return;
-  if (isHoldingManualHookshot(player) || playerHooks.has(player.id)) {
+  const shouldShow = isHoldingManualHookshot(player) || playerHooks.has(player.id);
+  if (shouldShow) {
+    playersWithPillHud.add(player.id);
     const hook = playerHooks.get(player.id);
     if (hook && !hook.hasStartedWinding) {
       player.onScreenDisplay.setActionBar("\xA76(\u25B0\u25B0\u25B0)");
@@ -386,6 +404,12 @@ function updateManualHookshotHud(player) {
       const empty = maxPills - filled;
       const pillBar = activeColor + "\u25B0".repeat(filled) + emptyColor + "\u25B0".repeat(empty);
       player.onScreenDisplay.setActionBar(`\xA77(${pillBar}\xA77)`);
+    }
+  } else if (playersWithPillHud.has(player.id)) {
+    playersWithPillHud.delete(player.id);
+    try {
+      player.onScreenDisplay.setActionBar("");
+    } catch {
     }
   }
 }
@@ -444,6 +468,40 @@ function resetHook(player, notify = true, isManualRelease = false) {
     } catch {
     }
   }
+  if (!isHoldingManualHookshot(player) && playersWithPillHud.has(player.id)) {
+    playersWithPillHud.delete(player.id);
+    try {
+      player.onScreenDisplay.setActionBar("");
+    } catch {
+    }
+  }
+}
+function tryDetachHookOnInteract(player) {
+  if (!player.isValid) return false;
+  const hook = playerHooks.get(player.id);
+  if (!hook) return false;
+  if (isHoldingManualHookshotInMainhand(player)) return false;
+  const headPos = player.getHeadLocation();
+  const hitPos = hook.hitPos;
+  const dx = hitPos.x - headPos.x;
+  const dy = hitPos.y - headPos.y;
+  const dz = hitPos.z - headPos.z;
+  const dist = Math.hypot(dx, dy, dz);
+  if (dist > MANUAL_HOOKSHOT_CONFIG.DETACH_REACH_DISTANCE) {
+    return false;
+  }
+  if (dist > 0.5) {
+    const viewDir = player.getViewDirection();
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const nz = dz / dist;
+    const dot = viewDir.x * nx + viewDir.y * ny + viewDir.z * nz;
+    if (dot < MANUAL_HOOKSHOT_CONFIG.DETACH_VIEW_ANGLE_COS) {
+      return false;
+    }
+  }
+  resetHook(player, true, true);
+  return true;
 }
 function handleManualHookshotUse(event, cancelCallback) {
   const item = event.itemStack;
@@ -663,6 +721,21 @@ function initManualHookshot() {
     handleManualHookshotUse(event, () => {
       event.cancel = true;
     });
+    if (event.source instanceof Player2) {
+      if (tryDetachHookOnInteract(event.source)) {
+        event.cancel = true;
+      }
+    }
+  });
+  world2.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+    if (tryDetachHookOnInteract(event.player)) {
+      event.cancel = true;
+    }
+  });
+  world2.beforeEvents.playerInteractWithEntity.subscribe((event) => {
+    if (tryDetachHookOnInteract(event.player)) {
+      event.cancel = true;
+    }
   });
   system2.runInterval(() => {
     updateManualHookshots();
@@ -677,6 +750,7 @@ function initManualHookshot() {
         resetHook(dead, false, false);
       }
       lastWindStartEffectTickMap.delete(dead.id);
+      playersWithPillHud.delete(dead.id);
     }
   });
   world2.afterEvents.playerDimensionChange.subscribe((event) => {
@@ -686,6 +760,7 @@ function initManualHookshot() {
         resetHook(player, false, false);
       }
       lastWindStartEffectTickMap.delete(player.id);
+      playersWithPillHud.delete(player.id);
     }
   });
   world2.afterEvents.playerSpawn.subscribe((event) => {
@@ -695,6 +770,15 @@ function initManualHookshot() {
         resetHook(player, false, false);
       }
       lastWindStartEffectTickMap.delete(player.id);
+      playersWithPillHud.delete(player.id);
+    }
+  });
+  world2.beforeEvents.playerLeave.subscribe((event) => {
+    const player = event.player;
+    if (player) {
+      playerHooks.delete(player.id);
+      lastWindStartEffectTickMap.delete(player.id);
+      playersWithPillHud.delete(player.id);
     }
   });
 }

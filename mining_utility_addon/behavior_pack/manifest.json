@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "Mining & Utility Addon BP v9",
+    "name": "Mining & Utility Addon BP v10",
     "description": "Auto Mining, Grave, and Offhand Torch Addon",
     "uuid": "3fa17145-4015-45d4-9784-74fe57bb4a5f",
     "version": [
       1,
       0,
-      9
+      10
     ],
     "min_engine_version": [
       1,
@@ -24,7 +24,7 @@
       "version": [
         1,
         0,
-        9
+        10
       ],
       "entry": "scripts/index.js"
     }
@@ -35,7 +35,7 @@
       "version": [
         1,
         0,
-        9
+        10
       ]
     },
     {

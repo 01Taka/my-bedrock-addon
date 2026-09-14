@@ -81,4 +81,10 @@ export const MANUAL_HOOKSHOT_CONFIG = {
 
   /** 解除時のサウンドピッチ */
   RELEASE_SOUND_PITCH: 1.8,
+
+  /** メインハンド非所持時にフックを着弾点付近で手動解除できる最大距離（ブロック） */
+  DETACH_REACH_DISTANCE: 3.0,
+
+  /** メインハンド非所持時にフックを着弾点付近で手動解除する際の視線方向内積閾値（0.70で約45度以内） */
+  DETACH_VIEW_ANGLE_COS: 0.7,
 };
