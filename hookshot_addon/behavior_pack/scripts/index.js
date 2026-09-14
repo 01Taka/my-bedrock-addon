@@ -6,8 +6,6 @@ import {
   world as world2,
   system as system2,
   Player as Player2,
-  InputButton,
-  ButtonState,
   EquipmentSlot
 } from "@minecraft/server";
 
@@ -31,8 +29,8 @@ var MANUAL_HOOKSHOT_CONFIG = {
   PILL_MAX_COUNT: 3,
   /** 落下速度リセット＆爆発エフェクトが発動する下方向速度の閾値（ブロック/tick。0.5で約10m/s以上の落下） */
   RESET_DOWNWARD_VELOCITY_THRESHOLD: 0.1,
-  /** 落下速度リセット時に付与する低速落下（slow_falling）の持続tick数（20tick=1秒。落下ダメージをリセット） */
-  SLOW_FALLING_TICKS_ON_RESET: 2,
+  /** 落下速度リセット時に付与する低速落下（slow_falling）の持続tick数（マルチプレイのPing考慮で15tick=0.75秒。落下ダメージを確実に無効化） */
+  SLOW_FALLING_TICKS_ON_RESET: 3,
   /** 巻き取り開始時の爆風エフェクト＆サウンドのインターバル（tick、20tick=約1秒） */
   RESET_EXPLOSION_INTERVAL_TICKS: 20,
   /** 落下速度リセット時の爆発パーティクル */
@@ -54,12 +52,14 @@ var MANUAL_HOOKSHOT_CONFIG = {
    *       "minecraft:candle_flame_particle"（小さな光点）
    */
   ROPE_PARTICLE: "minecraft:basic_crit_particle",
-  /** ロープパーティクルの描画間隔（ブロック） */
-  ROPE_STEP_DISTANCE: 0.6,
+  /** ロープパーティクルの描画間隔（ブロック。マルチプレイのパケット帯域を考慮し1.2ブロック間隔で軽量化） */
+  ROPE_STEP_DISTANCE: 1.2,
+  /** フック着弾後、アイテム使用による手動解除を受け付けない最小待機tick（マルチプレイのパケットジッター・長押しによる誤解除暴発を防止） */
+  RELEASE_DEBOUNCE_TICKS: 5,
   /** 解除時の上方向ホップインパルス強度（木の上などに着地しやすくする） */
   RELEASE_UPWARD_IMPULSE: 0.8,
-  /** 空中解除時に付与する低速落下（slow_falling）の持続tick数（20tick=1秒。落下ダメージをリセット） */
-  SLOW_FALLING_TICKS_ON_RELEASE: 2,
+  /** 空中解除時に付与する低速落下（slow_falling）の持続tick数 */
+  SLOW_FALLING_TICKS_ON_RELEASE: 3,
   /** 解除時の小爆発パーティクル */
   RELEASE_PARTICLE: "minecraft:explosion_particle",
   /** 解除時のサウンドID */
@@ -314,8 +314,12 @@ function isSneakButtonPressed(player) {
     return true;
   }
   try {
-    if (player.inputInfo) {
-      return player.inputInfo.getButtonState(InputButton.Sneak) === ButtonState.Pressed;
+    const input = player.inputInfo;
+    if (input && typeof input.getButtonState === "function") {
+      const state = input.getButtonState("Sneak");
+      if (state === "Pressed" || state === 1) {
+        return true;
+      }
     }
   } catch {
   }
@@ -324,6 +328,7 @@ function isSneakButtonPressed(player) {
 var playerHooks = /* @__PURE__ */ new Map();
 var lastWindStartEffectTickMap = /* @__PURE__ */ new Map();
 var playersWithPillHud = /* @__PURE__ */ new Set();
+var targetAimCache = /* @__PURE__ */ new Map();
 function isHoldingManualHookshot(player) {
   try {
     const equippable = player.getComponent("minecraft:equippable");
@@ -373,25 +378,34 @@ function updateManualHookshotHud(player) {
     const activeColor = player.isOnGround ? "\xA72" : "\xA7a";
     let canHitTarget = false;
     if (!hook) {
-      try {
-        const entityHits = player.getEntitiesFromViewDirection({
-          maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE
-        });
-        for (const hit of entityHits) {
-          if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
-            canHitTarget = true;
-            break;
-          }
-        }
-        if (!canHitTarget) {
-          const blockHit = player.getBlockFromViewDirection({
-            maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-            includePassableBlocks: false,
-            includeLiquidBlocks: false
+      const cached = targetAimCache.get(player.id);
+      if (cached && system2.currentTick - cached.lastCheckTick < 4) {
+        canHitTarget = cached.canHit;
+      } else {
+        try {
+          const entityHits = player.getEntitiesFromViewDirection({
+            maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE
           });
-          canHitTarget = blockHit !== void 0;
+          for (const hit of entityHits) {
+            if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
+              canHitTarget = true;
+              break;
+            }
+          }
+          if (!canHitTarget) {
+            const blockHit = player.getBlockFromViewDirection({
+              maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+              includePassableBlocks: false,
+              includeLiquidBlocks: false
+            });
+            canHitTarget = blockHit !== void 0;
+          }
+        } catch {
         }
-      } catch {
+        targetAimCache.set(player.id, {
+          canHit: canHitTarget,
+          lastCheckTick: system2.currentTick
+        });
       }
     }
     const emptyColor = hook || canHitTarget ? "\xA77" : "\xA78";
@@ -510,7 +524,11 @@ function handleManualHookshotUse(event, cancelCallback) {
   if (!(player instanceof Player2)) return;
   cancelCallback();
   system2.run(() => {
-    if (playerHooks.has(player.id)) {
+    const existingHook = playerHooks.get(player.id);
+    if (existingHook) {
+      if (system2.currentTick - existingHook.attachedTick < MANUAL_HOOKSHOT_CONFIG.RELEASE_DEBOUNCE_TICKS) {
+        return;
+      }
       resetHook(player, true, true);
       return;
     }
@@ -571,7 +589,8 @@ function handleManualHookshotUse(event, cancelCallback) {
       dimensionId: player.dimension.id,
       sneakTickCounter: 0,
       hasStartedWinding: false,
-      chargeTicks: 0
+      chargeTicks: 0,
+      attachedTick: system2.currentTick
     });
     try {
       player.dimension.spawnParticle(MANUAL_HOOKSHOT_CONFIG.HIT_PARTICLE, hitPos);
@@ -751,6 +770,7 @@ function initManualHookshot() {
       }
       lastWindStartEffectTickMap.delete(dead.id);
       playersWithPillHud.delete(dead.id);
+      targetAimCache.delete(dead.id);
     }
   });
   world2.afterEvents.playerDimensionChange.subscribe((event) => {
@@ -761,6 +781,7 @@ function initManualHookshot() {
       }
       lastWindStartEffectTickMap.delete(player.id);
       playersWithPillHud.delete(player.id);
+      targetAimCache.delete(player.id);
     }
   });
   world2.afterEvents.playerSpawn.subscribe((event) => {
@@ -771,6 +792,7 @@ function initManualHookshot() {
       }
       lastWindStartEffectTickMap.delete(player.id);
       playersWithPillHud.delete(player.id);
+      targetAimCache.delete(player.id);
     }
   });
   world2.beforeEvents.playerLeave.subscribe((event) => {
@@ -779,6 +801,7 @@ function initManualHookshot() {
       playerHooks.delete(player.id);
       lastWindStartEffectTickMap.delete(player.id);
       playersWithPillHud.delete(player.id);
+      targetAimCache.delete(player.id);
     }
   });
 }

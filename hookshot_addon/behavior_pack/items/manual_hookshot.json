@@ -13,7 +13,11 @@
         "value": "§b手動巻取りフックショット§r"
       },
       "minecraft:max_stack_size": 1,
-      "minecraft:hand_equipped": true
+      "minecraft:hand_equipped": true,
+      "minecraft:cooldown": {
+        "category": "manual_hookshot",
+        "duration": 0.2
+      }
     }
   }
 }

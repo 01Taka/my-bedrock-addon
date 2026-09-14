@@ -1,0 +1,35 @@
+{
+  "format_version": "1.12.0",
+  "minecraft:recipe_shaped": {
+    "description": {
+      "identifier": "addon:manual_hookshot"
+    },
+    "tags": [ "crafting_table" ],
+    "pattern": [
+      "I  ",
+      "LCR",
+      " LT"
+    ],
+    "key": {
+      "I": {
+        "item": "minecraft:iron_block"
+      },
+      "L": {
+        "item": "minecraft:lead"
+      },
+      "C": {
+        "item": "minecraft:crossbow"
+      },
+      "R": {
+        "item": "minecraft:lever"
+      },
+      "T": {
+        "item": "minecraft:tnt"
+      }
+    },
+    "result": {
+      "item": "addon:manual_hookshot",
+      "count": 1
+    }
+  }
+}

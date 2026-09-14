@@ -4,8 +4,6 @@ import {
   Player,
   ItemUseBeforeEvent,
   Vector3,
-  InputButton,
-  ButtonState,
   EquipmentSlot,
   Entity,
 } from "@minecraft/server";
@@ -16,6 +14,7 @@ import { isHeavyEntity, isValidHookshotTarget } from "./entities";
 /**
  * プレイヤーが物理的にスニーク（シフト）キーを押下しているかを判定
  * （低所・匍匐時の強制スニークによる誤動作を防止、Switch向け常時シフト設定対応）
+ * 古いAPIバージョン環境でも安全に動作するようオプショナルチェイニングで判定
  */
 function isSneakButtonPressed(player: Player): boolean {
   // 常時シフト判定設定がONの場合は常にtrue
@@ -23,11 +22,12 @@ function isSneakButtonPressed(player: Player): boolean {
     return true;
   }
   try {
-    if (player.inputInfo) {
-      return (
-        player.inputInfo.getButtonState(InputButton.Sneak) ===
-        ButtonState.Pressed
-      );
+    const input = (player as any).inputInfo;
+    if (input && typeof input.getButtonState === "function") {
+      const state = input.getButtonState("Sneak");
+      if (state === "Pressed" || state === 1) {
+        return true;
+      }
     }
   } catch {}
   return player.isSneaking;
@@ -45,6 +45,8 @@ interface PlayerHookState {
   hasStartedWinding: boolean;
   /** 巻き取り開始時からの経過tick数（ピルチャージ用） */
   chargeTicks: number;
+  /** 着弾時のゲームtick（マルチプレイでの即時解除暴発防止用） */
+  attachedTick: number;
 }
 
 /** プレイヤーIDをキーにしたフック状態マップ */
@@ -55,6 +57,9 @@ const lastWindStartEffectTickMap = new Map<string, number>();
 
 /** 前回ピルHUDを表示したプレイヤーIDのセット（非表示時のアクションバー消去用） */
 const playersWithPillHud = new Set<string>();
+
+/** 照準判定（未着弾時の空ピル色）のキャッシュ（マルチプレイ時の毎tickレイキャスト負荷軽減用） */
+const targetAimCache = new Map<string, { canHit: boolean; lastCheckTick: number }>();
 
 /**
  * プレイヤーがマニュアルフックショットを所持（メインハンドまたはオフハンド）しているか判定
@@ -134,27 +139,37 @@ export function updateManualHookshotHud(player: Player): void {
     const activeColor = player.isOnGround ? "§2" : "§a";
 
     // 射程内で壁または大型モブに着弾可能か判定（未着弾時の空ピル色用）
+    // サーバー負荷軽減のため 4 tick (約0.2秒) ごとにキャッシュ更新
     let canHitTarget = false;
     if (!hook) {
-      try {
-        const entityHits = player.getEntitiesFromViewDirection({
-          maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-        });
-        for (const hit of entityHits) {
-          if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
-            canHitTarget = true;
-            break;
-          }
-        }
-        if (!canHitTarget) {
-          const blockHit = player.getBlockFromViewDirection({
+      const cached = targetAimCache.get(player.id);
+      if (cached && system.currentTick - cached.lastCheckTick < 4) {
+        canHitTarget = cached.canHit;
+      } else {
+        try {
+          const entityHits = player.getEntitiesFromViewDirection({
             maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-            includePassableBlocks: false,
-            includeLiquidBlocks: false,
           });
-          canHitTarget = blockHit !== undefined;
-        }
-      } catch {}
+          for (const hit of entityHits) {
+            if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
+              canHitTarget = true;
+              break;
+            }
+          }
+          if (!canHitTarget) {
+            const blockHit = player.getBlockFromViewDirection({
+              maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
+              includePassableBlocks: false,
+              includeLiquidBlocks: false,
+            });
+            canHitTarget = blockHit !== undefined;
+          }
+        } catch {}
+        targetAimCache.set(player.id, {
+          canHit: canHitTarget,
+          lastCheckTick: system.currentTick,
+        });
+      }
     }
 
     // 空ピルの色: 着弾中または射程内で壁/大型モブに当たる時は明るい灰色(§7)、射程外や対象がない時は暗灰色(§8)
@@ -335,7 +350,15 @@ export function handleManualHookshotUse(
 
   system.run(() => {
     // 既にフックが存在する場合はフックを外してリセット（手動解除 = true）
-    if (playerHooks.has(player.id)) {
+    const existingHook = playerHooks.get(player.id);
+    if (existingHook) {
+      // 射出直後のパケット重複・わずかな長押しによる即時解除暴発を防止（デバウンス判定）
+      if (
+        system.currentTick - existingHook.attachedTick <
+        MANUAL_HOOKSHOT_CONFIG.RELEASE_DEBOUNCE_TICKS
+      ) {
+        return;
+      }
       resetHook(player, true, true);
       return;
     }
@@ -411,6 +434,7 @@ export function handleManualHookshotUse(
       sneakTickCounter: 0,
       hasStartedWinding: false,
       chargeTicks: 0,
+      attachedTick: system.currentTick,
     });
 
     try {
@@ -667,6 +691,7 @@ export function initManualHookshot(): void {
       }
       lastWindStartEffectTickMap.delete(dead.id);
       playersWithPillHud.delete(dead.id);
+      targetAimCache.delete(dead.id);
     }
   });
 
@@ -679,6 +704,7 @@ export function initManualHookshot(): void {
       }
       lastWindStartEffectTickMap.delete(player.id);
       playersWithPillHud.delete(player.id);
+      targetAimCache.delete(player.id);
     }
   });
 
@@ -691,6 +717,7 @@ export function initManualHookshot(): void {
       }
       lastWindStartEffectTickMap.delete(player.id);
       playersWithPillHud.delete(player.id);
+      targetAimCache.delete(player.id);
     }
   });
 
@@ -701,6 +728,7 @@ export function initManualHookshot(): void {
       playerHooks.delete(player.id);
       lastWindStartEffectTickMap.delete(player.id);
       playersWithPillHud.delete(player.id);
+      targetAimCache.delete(player.id);
     }
   });
 }

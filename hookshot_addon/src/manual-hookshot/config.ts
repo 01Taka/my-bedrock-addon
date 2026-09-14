@@ -29,8 +29,8 @@ export const MANUAL_HOOKSHOT_CONFIG = {
   /** 落下速度リセット＆爆発エフェクトが発動する下方向速度の閾値（ブロック/tick。0.5で約10m/s以上の落下） */
   RESET_DOWNWARD_VELOCITY_THRESHOLD: 0.1,
 
-  /** 落下速度リセット時に付与する低速落下（slow_falling）の持続tick数（20tick=1秒。落下ダメージをリセット） */
-  SLOW_FALLING_TICKS_ON_RESET: 2,
+  /** 落下速度リセット時に付与する低速落下（slow_falling）の持続tick数（マルチプレイのPing考慮で15tick=0.75秒。落下ダメージを確実に無効化） */
+  SLOW_FALLING_TICKS_ON_RESET: 3,
 
   /** 巻き取り開始時の爆風エフェクト＆サウンドのインターバル（tick、20tick=約1秒） */
   RESET_EXPLOSION_INTERVAL_TICKS: 20,
@@ -61,14 +61,17 @@ export const MANUAL_HOOKSHOT_CONFIG = {
    */
   ROPE_PARTICLE: "minecraft:basic_crit_particle",
 
-  /** ロープパーティクルの描画間隔（ブロック） */
-  ROPE_STEP_DISTANCE: 0.6,
+  /** ロープパーティクルの描画間隔（ブロック。マルチプレイのパケット帯域を考慮し1.2ブロック間隔で軽量化） */
+  ROPE_STEP_DISTANCE: 1.2,
+
+  /** フック着弾後、アイテム使用による手動解除を受け付けない最小待機tick（マルチプレイのパケットジッター・長押しによる誤解除暴発を防止） */
+  RELEASE_DEBOUNCE_TICKS: 5,
 
   /** 解除時の上方向ホップインパルス強度（木の上などに着地しやすくする） */
   RELEASE_UPWARD_IMPULSE: 0.8,
 
-  /** 空中解除時に付与する低速落下（slow_falling）の持続tick数（20tick=1秒。落下ダメージをリセット） */
-  SLOW_FALLING_TICKS_ON_RELEASE: 2,
+  /** 空中解除時に付与する低速落下（slow_falling）の持続tick数 */
+  SLOW_FALLING_TICKS_ON_RELEASE: 3,
 
   /** 解除時の小爆発パーティクル */
   RELEASE_PARTICLE: "minecraft:explosion_particle",
