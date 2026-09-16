@@ -1913,28 +1913,36 @@ function updatePlayerVirtualNavHUD(player) {
     }
   }
   playerFocusedWaypointMap.set(player.id, activeWaypoint);
-  if (activeWaypoint) {
+  const isZoomed = isHolding && (Math.abs(currentOffset.x) > 0.01 || Math.abs(currentOffset.y) > 0.01 || Math.abs(currentOffset.z) > 0.01 || Math.abs(state.targetOffset.x) > 0.01 || Math.abs(state.targetOffset.y) > 0.01 || Math.abs(state.targetOffset.z) > 0.01);
+  const zoomPrefix = isZoomed ? "\xA77\u30BA\u30FC\u30E0\u4E2D / " : "";
+  if (currentTick < state.unpinNoticeUntilTick) {
+    try {
+      player.onScreenDisplay.setActionBar("\xA77[\u56FA\u5B9A\u89E3\u9664]");
+    } catch {
+    }
+    state.wasShowingHUD = true;
+  } else if (activeWaypoint) {
     const dx = activeWaypoint.pos.x - headLoc.x;
     const dy = activeWaypoint.pos.y - headLoc.y;
     const dz = activeWaypoint.pos.z - headLoc.z;
     const realDist = Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz));
     const arrow = getRelative8DirectionArrow(player, activeWaypoint.pos);
     try {
-      if (isPinnedActive) {
+      if (isPinnedActive && isHolding) {
         player.onScreenDisplay.setActionBar(
-          `\xA76[\u56FA\u5B9A] \xA7e${activeWaypoint.name} \xA7f${realDist}m \xA7b${arrow}`
+          `${zoomPrefix}\xA76[\u56FA\u5B9A] \xA7e${activeWaypoint.name} \xA7f${realDist}m \xA7b${arrow}`
         );
       } else {
         player.onScreenDisplay.setActionBar(
-          `\xA7e${activeWaypoint.name} \xA7f${realDist}m \xA7b${arrow}`
+          `${zoomPrefix}\xA7e${activeWaypoint.name} \xA7f${realDist}m \xA7b${arrow}`
         );
       }
       state.wasShowingHUD = true;
     } catch {
     }
-  } else if (currentTick < state.unpinNoticeUntilTick) {
+  } else if (isZoomed) {
     try {
-      player.onScreenDisplay.setActionBar("\xA77[\u56FA\u5B9A\u89E3\u9664]");
+      player.onScreenDisplay.setActionBar("\xA77\u30BA\u30FC\u30E0\u4E2D");
     } catch {
     }
     state.wasShowingHUD = true;

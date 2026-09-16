@@ -531,10 +531,28 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
   // フォーカス中ウェイポイントの保存（パーティクル強調用）
   playerFocusedWaypointMap.set(player.id, activeWaypoint);
 
+  // ズーム中フラグ（コンパス所持時のみ有効）
+  const isZoomed =
+    isHolding &&
+    (Math.abs(currentOffset.x) > 0.01 ||
+      Math.abs(currentOffset.y) > 0.01 ||
+      Math.abs(currentOffset.z) > 0.01 ||
+      Math.abs(state.targetOffset.x) > 0.01 ||
+      Math.abs(state.targetOffset.y) > 0.01 ||
+      Math.abs(state.targetOffset.z) > 0.01);
+
+  const zoomPrefix = isZoomed ? "§7ズーム中 / " : "";
+
   // ----------------------------------------------------
   // 画面中央下部（アクションバー）へのUI表示: 「名前 〇m ↑」
   // ----------------------------------------------------
-  if (activeWaypoint) {
+  if (currentTick < state.unpinNoticeUntilTick) {
+    // 固定解除メッセージ表示期間中: 固定解除テキストを最優先で維持
+    try {
+      player.onScreenDisplay.setActionBar("§7[固定解除]");
+    } catch {}
+    state.wasShowingHUD = true;
+  } else if (activeWaypoint) {
     // プレイヤーの実際の現在地からの直線距離
     const dx = activeWaypoint.pos.x - headLoc.x;
     const dy = activeWaypoint.pos.y - headLoc.y;
@@ -545,21 +563,21 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
     const arrow = getRelative8DirectionArrow(player, activeWaypoint.pos);
 
     try {
-      if (isPinnedActive) {
+      if (isPinnedActive && isHolding) {
         player.onScreenDisplay.setActionBar(
-          `§6[固定] §e${activeWaypoint.name} §f${realDist}m §b${arrow}`,
+          `${zoomPrefix}§6[固定] §e${activeWaypoint.name} §f${realDist}m §b${arrow}`,
         );
       } else {
         player.onScreenDisplay.setActionBar(
-          `§e${activeWaypoint.name} §f${realDist}m §b${arrow}`,
+          `${zoomPrefix}§e${activeWaypoint.name} §f${realDist}m §b${arrow}`,
         );
       }
       state.wasShowingHUD = true;
     } catch {}
-  } else if (currentTick < state.unpinNoticeUntilTick) {
-    // 固定解除メッセージ表示期間中: 固定解除テキストを維持
+  } else if (isZoomed) {
+    // ウェイポイントが表示されていない場合でも、コンパスを持ってズーム中なら「ズーム中」を表示
     try {
-      player.onScreenDisplay.setActionBar("§7[固定解除]");
+      player.onScreenDisplay.setActionBar("§7ズーム中");
     } catch {}
     state.wasShowingHUD = true;
   } else if (state.wasShowingHUD) {
