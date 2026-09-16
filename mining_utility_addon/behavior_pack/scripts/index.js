@@ -1,5 +1,5 @@
 // src/index.ts
-import { world as world5, system as system5 } from "@minecraft/server";
+import { world as world6, system as system5 } from "@minecraft/server";
 
 // ../node_modules/@minecraft/math/lib/src/general/clamp.js
 function clampNumber(val, min, max) {
@@ -1662,10 +1662,36 @@ function handleToggleWaypoint(player) {
   }
 }
 
+// src/map.ts
+import { world as world5, EquipmentSlot as EquipmentSlot5 } from "@minecraft/server";
+var TARGET_MAP_LEVEL = 3;
+var MAP_SIZE = 128 * Math.pow(2, TARGET_MAP_LEVEL);
+world5.afterEvents.itemUse.subscribe((event) => {
+  const player = event.source;
+  const item = event.itemStack;
+  if (player.isSneaking && item.typeId === "minecraft:filled_map") {
+    const x = player.location.x;
+    const z = player.location.z;
+    const mx = Math.floor((x + 64) / MAP_SIZE);
+    const mz = Math.floor((z + 64) / MAP_SIZE);
+    const equippable = player.getComponent("minecraft:equippable");
+    if (!equippable) return;
+    const mainhandItem = equippable.getEquipment(EquipmentSlot5.Mainhand);
+    if (mainhandItem && mainhandItem.typeId === "minecraft:filled_map") {
+      let baseName = mainhandItem.nameTag ?? "\u5730\u56F3";
+      baseName = baseName.replace(/\s*\([+-]?\d+,\s*[+-]?\d+\)$/, "");
+      const newName = `${baseName} (${mx}, ${mz})`;
+      mainhandItem.nameTag = newName;
+      equippable.setEquipment(EquipmentSlot5.Mainhand, mainhandItem);
+      player.sendMessage(`\xA7a[\u5730\u56F3] \u540D\u524D\u3092\u5909\u66F4\u3057\u307E\u3057\u305F: \xA7f${newName}`);
+    }
+  }
+});
+
 // src/index.ts
 system5.run(() => {
   try {
-    world5.gameRules.keepInventory = true;
+    world6.gameRules.keepInventory = true;
   } catch {
   }
   initWaypoints();
@@ -1673,17 +1699,17 @@ system5.run(() => {
     "\xA7a[Mining & Utility Addon] \u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u30FB\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u6A5F\u80FD\u304C\u6B63\u5E38\u306B\u30ED\u30FC\u30C9\u3055\u308C\u307E\u3057\u305F\u3002"
   );
 });
-world5.afterEvents.playerSpawn.subscribe((event) => {
+world6.afterEvents.playerSpawn.subscribe((event) => {
   handleGravePlayerSpawn(event);
 });
-world5.beforeEvents.playerBreakBlock.subscribe((event) => {
+world6.beforeEvents.playerBreakBlock.subscribe((event) => {
   handleGraveBeforeBreak(event);
 });
-world5.afterEvents.playerBreakBlock.subscribe((event) => {
+world6.afterEvents.playerBreakBlock.subscribe((event) => {
   oreMassDestruction(event, ORE_BLOCK_IDS);
   treeMassDestruction(event);
 });
-world5.beforeEvents.itemUse.subscribe((event) => {
+world6.beforeEvents.itemUse.subscribe((event) => {
   handleSettingsItemUse(event, () => {
     event.cancel = true;
   });
@@ -1691,10 +1717,10 @@ world5.beforeEvents.itemUse.subscribe((event) => {
     event.cancel = true;
   });
 });
-world5.afterEvents.entityDie.subscribe((event) => {
+world6.afterEvents.entityDie.subscribe((event) => {
   handleGraveEntityDie(event);
 });
-world5.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+world6.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
 });
 system5.afterEvents.scriptEventReceive.subscribe((event) => {

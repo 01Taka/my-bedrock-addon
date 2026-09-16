@@ -13,6 +13,7 @@ import {
 } from "./grave";
 import { handleSettingsScriptEvent, handleSettingsItemUse } from "./settings";
 import { initWaypoints, handleWaypointScriptEvent } from "./waypoints";
+import "./map";
 
 // 初期化
 system.run(() => {
