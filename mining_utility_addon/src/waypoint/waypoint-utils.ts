@@ -5,6 +5,8 @@ import {
   MolangVariableMap,
   Player,
 } from "@minecraft/server";
+import { waypointCache } from "./store-waypoint";
+import { BANNER_COLOR_RGBS } from "./waypoint.types";
 
 /**
  * 変換済みのRGBカラー (0.0 ~ 1.0)
@@ -72,9 +74,9 @@ export function spawnWaypointParticle(options: WaypointParticleOptions): void {
 
   const molang = new MolangVariableMap();
   molang.setFloat("variable.marker_size", Math.max(0.01, size));
-  molang.setFloat("variable.color_r", color.r);
-  molang.setFloat("variable.color_g", color.g);
-  molang.setFloat("variable.color_b", color.b);
+  molang.setFloat("variable.color.r", color.r);
+  molang.setFloat("variable.color.g", color.g);
+  molang.setFloat("variable.color.b", color.b);
   molang.setFloat("variable.lifetime", lifetimeSeconds);
   molang.setColorRGB("variable.color", {
     red: color.r,
@@ -117,9 +119,9 @@ export function spawnWaypointParticleForPlayer(
 
   const molang = new MolangVariableMap();
   molang.setFloat("variable.marker_size", Math.max(0.01, size));
-  molang.setFloat("variable.color_r", color.r);
-  molang.setFloat("variable.color_g", color.g);
-  molang.setFloat("variable.color_b", color.b);
+  molang.setFloat("variable.color.r", color.r);
+  molang.setFloat("variable.color.g", color.g);
+  molang.setFloat("variable.color.b", color.b);
   molang.setFloat("variable.lifetime", lifetimeSeconds);
   molang.setColorRGB("variable.color", {
     red: color.r,
@@ -131,5 +133,55 @@ export function spawnWaypointParticleForPlayer(
     player.spawnParticle("mining_utility:hud_marker", location, molang);
   } catch (e) {
     console.error("[WaypointUtils] プレイヤー専用パーティクル表示エラー:", e);
+  }
+}
+
+export const HUD_MARKER_CONFIG = {
+  baseSize: 1,
+  projectionDistance: 1.5,
+  minSize: 0.03,
+};
+
+export function displayHUDWaypoints(player: Player) {
+  for (let waypoint of waypointCache) {
+    try {
+      const headLoc = player.getHeadLocation();
+      const dimension = player.dimension;
+
+      const waypointDimension = waypoint.dim.includes(":")
+        ? waypoint.dim
+        : `minecraft:${waypoint.dim}`;
+      if (waypointDimension !== dimension.id) continue;
+
+      const targetX = waypoint.pos.x;
+      const targetY = waypoint.pos.y;
+      const targetZ = waypoint.pos.z;
+
+      const dx = targetX - headLoc.x;
+      const dy = targetY - (headLoc.y - 0.5);
+      const dz = targetZ - headLoc.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+      // 4m未満の至近距離は実体表示で十分なためスキップ
+      if (dist < 4.0) continue;
+
+      // 投影距離
+      const projDist = HUD_MARKER_CONFIG.projectionDistance;
+      const projX = headLoc.x + (dx / dist) * projDist;
+      const projY = headLoc.y + (dy / dist) * projDist;
+      const projZ = headLoc.z + (dz / dist) * projDist;
+
+      // 相似比に基づく見かけサイズ
+      const apparentSize = HUD_MARKER_CONFIG.baseSize * (projDist / dist);
+      const finalSize = Math.max(HUD_MARKER_CONFIG.minSize, apparentSize);
+
+      spawnWaypointParticle({
+        dimension: waypointDimension,
+        location: { x: projX, y: projY, z: projZ },
+        color: BANNER_COLOR_RGBS[waypoint.color],
+        size: finalSize,
+        durationTicks: 3,
+      });
+    } catch {}
   }
 }

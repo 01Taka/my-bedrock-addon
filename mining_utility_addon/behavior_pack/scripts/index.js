@@ -1,5 +1,5 @@
 // src/index.ts
-import { world as world7, system as system5 } from "@minecraft/server";
+import { world as world8, system as system5 } from "@minecraft/server";
 
 // ../node_modules/@minecraft/math/lib/src/general/clamp.js
 function clampNumber(val, min, max) {
@@ -1452,503 +1452,264 @@ function handleGraveBeforeBreak(event) {
   }
 }
 
-// src/waypoints.ts
+// src/waypoint/waypoints.ts
 import {
-  world as world4,
+  world as world6,
   system as system4,
-  EquipmentSlot as EquipmentSlot5,
+  EquipmentSlot as EquipmentSlot5
+} from "@minecraft/server";
+
+// src/waypoint/waypoint-utils.ts
+import {
+  world as world5,
   MolangVariableMap
 } from "@minecraft/server";
-var BANNER_COLORS = {
-  white: { r: 1, g: 1, b: 1, nameJa: "\u767D", chatCode: "\xA7f" },
-  orange: { r: 0.98, g: 0.53, b: 0.11, nameJa: "\u6A59", chatCode: "\xA76" },
-  magenta: { r: 0.83, g: 0.31, b: 0.75, nameJa: "\u8D64\u7D2B", chatCode: "\xA7d" },
-  light_blue: { r: 0.23, g: 0.7, b: 0.85, nameJa: "\u7A7A\u8272", chatCode: "\xA7b" },
-  yellow: { r: 0.99, g: 0.86, b: 0.17, nameJa: "\u9EC4", chatCode: "\xA7e" },
-  lime: { r: 0.5, g: 0.78, b: 0.12, nameJa: "\u9EC4\u7DD1", chatCode: "\xA7a" },
-  pink: { r: 0.95, g: 0.6, b: 0.69, nameJa: "\u6843", chatCode: "\xA7d" },
-  gray: { r: 0.28, g: 0.31, b: 0.33, nameJa: "\u7070", chatCode: "\xA78" },
-  light_gray: { r: 0.62, g: 0.62, b: 0.59, nameJa: "\u8584\u7070", chatCode: "\xA77" },
-  cyan: { r: 0.09, g: 0.61, b: 0.62, nameJa: "\u9752\u7DD1", chatCode: "\xA73" },
-  purple: { r: 0.53, g: 0.2, b: 0.72, nameJa: "\u7D2B", chatCode: "\xA75" },
-  blue: { r: 0.24, g: 0.31, b: 0.67, nameJa: "\u9752", chatCode: "\xA79" },
-  brown: { r: 0.51, g: 0.33, b: 0.2, nameJa: "\u8336", chatCode: "\xA76" },
-  green: { r: 0.36, g: 0.49, b: 0.15, nameJa: "\u7DD1", chatCode: "\xA72" },
-  red: { r: 0.69, g: 0.18, b: 0.15, nameJa: "\u8D64", chatCode: "\xA7c" },
-  black: { r: 0.15, g: 0.15, b: 0.18, nameJa: "\u9ED2", chatCode: "\xA78" }
-};
-var HUD_MARKER_CONFIG = {
-  baseSize: 0.6,
-  projectionDistance: 1.5,
-  minSize: 0.08
-};
-function setHudMarkerMinSize(minSize) {
-  HUD_MARKER_CONFIG.minSize = Math.max(0.01, minSize);
+
+// src/waypoint/store-waypoint.ts
+import { world as world4 } from "@minecraft/server";
+var STORAGE_KEY = "waypoints";
+var waypoints = /* @__PURE__ */ new Map();
+var waypointCache = [];
+function updateCache() {
+  waypointCache = Array.from(waypoints.values());
 }
-var activeWaypoints = /* @__PURE__ */ new Map();
-var playerWaypointsVisible = /* @__PURE__ */ new Map();
-var playerHudEntities = /* @__PURE__ */ new Map();
-var pendingBannerPlacements = /* @__PURE__ */ new Map();
-function extractBannerColor(typeId, locKey) {
-  const combined = `${typeId.toLowerCase()} ${(locKey || "").toLowerCase()}`;
-  if (combined.includes("light_blue") || combined.includes("lightblue")) return BANNER_COLORS.light_blue;
-  if (combined.includes("light_gray") || combined.includes("lightgray") || combined.includes("silver")) return BANNER_COLORS.light_gray;
-  if (combined.includes("lime")) return BANNER_COLORS.lime;
-  if (combined.includes("magenta")) return BANNER_COLORS.magenta;
-  if (combined.includes("orange")) return BANNER_COLORS.orange;
-  if (combined.includes("yellow")) return BANNER_COLORS.yellow;
-  if (combined.includes("pink")) return BANNER_COLORS.pink;
-  if (combined.includes("cyan")) return BANNER_COLORS.cyan;
-  if (combined.includes("purple")) return BANNER_COLORS.purple;
-  if (combined.includes("blue")) return BANNER_COLORS.blue;
-  if (combined.includes("brown")) return BANNER_COLORS.brown;
-  if (combined.includes("green")) return BANNER_COLORS.green;
-  if (combined.includes("red")) return BANNER_COLORS.red;
-  if (combined.includes("black")) return BANNER_COLORS.black;
-  if (combined.includes("gray")) return BANNER_COLORS.gray;
-  if (combined.includes("white")) return BANNER_COLORS.white;
-  return BANNER_COLORS.white;
+function formatDimId(dimId) {
+  return dimId.replace(/^minecraft:/, "");
 }
-function initWaypoints() {
-  world4.afterEvents.playerLeave.subscribe((event) => {
-    playerWaypointsVisible.delete(event.playerId);
-    pendingBannerPlacements.delete(event.playerId);
-    const hud = playerHudEntities.get(event.playerId);
-    if (hud && hud.isValid) {
-      try {
-        hud.remove();
-      } catch {
-      }
-    }
-    playerHudEntities.delete(event.playerId);
-  });
-  system4.runInterval(() => {
-    if (activeWaypoints.size === 0) return;
-    const players = world4.getAllPlayers();
-    for (const [key, wp] of activeWaypoints) {
-      try {
-        const dimension = world4.getDimension(wp.dimensionId);
-        if (!wp.entity || !wp.entity.isValid) {
-          wp.entity = dimension.spawnEntity("mining_utility:waypoint_marker", {
-            x: wp.x + 0.5,
-            y: wp.y + 0.1,
-            z: wp.z + 0.5
-          });
-        }
-        if (wp.name && wp.name.trim().length > 0) {
-          let minDistance = null;
-          for (const player of players) {
-            if (player.dimension.id !== wp.dimensionId) continue;
-            const dx = player.location.x - (wp.x + 0.5);
-            const dy = player.location.y - (wp.y + 0.5);
-            const dz = player.location.z - (wp.z + 0.5);
-            const dist = Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz));
-            if (minDistance === null || dist < minDistance) {
-              minDistance = dist;
-            }
-          }
-          const distanceText = minDistance !== null ? ` \xA76[\xA7f${minDistance}m\xA76]` : "";
-          wp.entity.nameTag = `${wp.color.chatCode}\u25C6 ${wp.name}${distanceText}
-\xA77(${wp.x}, ${wp.y}, ${wp.z})`;
-        } else {
-          wp.entity.nameTag = "";
-        }
-        const molang = new MolangVariableMap();
-        molang.setFloat("variable.color_r", wp.color.r);
-        molang.setFloat("variable.color_g", wp.color.g);
-        molang.setFloat("variable.color_b", wp.color.b);
-        molang.setColorRGB("variable.color", {
-          red: wp.color.r,
-          green: wp.color.g,
-          blue: wp.color.b
-        });
-        dimension.spawnParticle(
-          "mining_utility:waypoint_marker",
-          {
-            x: wp.x + 0.5,
-            y: wp.y + 1.2,
-            z: wp.z + 0.5
-          },
-          molang
-        );
-      } catch {
-      }
-    }
-  }, 10);
-  system4.runInterval(() => {
-    if (activeWaypoints.size === 0) return;
-    for (const player of world4.getAllPlayers()) {
-      const isVisible = playerWaypointsVisible.get(player.id) ?? true;
-      if (!isVisible) continue;
-      try {
-        const headLoc = player.getHeadLocation();
-        const dimension = player.dimension;
-        for (const [_, wp] of activeWaypoints) {
-          if (wp.dimensionId !== dimension.id) continue;
-          const targetX = wp.x + 0.5;
-          const targetY = wp.y + 0.5;
-          const targetZ = wp.z + 0.5;
-          const dx = targetX - headLoc.x;
-          const dy = targetY - headLoc.y;
-          const dz = targetZ - headLoc.z;
-          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (dist < 2) continue;
-          const projDist = HUD_MARKER_CONFIG.projectionDistance;
-          const projX = headLoc.x + dx / dist * projDist;
-          const projY = headLoc.y + dy / dist * projDist;
-          const projZ = headLoc.z + dz / dist * projDist;
-          const apparentSize = HUD_MARKER_CONFIG.baseSize * (projDist / dist);
-          const finalSize = Math.max(HUD_MARKER_CONFIG.minSize, apparentSize);
-          const molang = new MolangVariableMap();
-          molang.setFloat("variable.marker_size", finalSize);
-          molang.setFloat("variable.color_r", wp.color.r);
-          molang.setFloat("variable.color_g", wp.color.g);
-          molang.setFloat("variable.color_b", wp.color.b);
-          molang.setColorRGB("variable.color", {
-            red: wp.color.r,
-            green: wp.color.g,
-            blue: wp.color.b
-          });
-          dimension.spawnParticle(
-            "mining_utility:hud_marker",
-            {
-              x: projX,
-              y: projY,
-              z: projZ
-            },
-            molang
-          );
-        }
-      } catch {
-      }
-    }
-  }, 3);
-  system4.runInterval(() => {
-    for (const player of world4.getAllPlayers()) {
-      const isVisible = playerWaypointsVisible.get(player.id) ?? true;
-      if (!isVisible || activeWaypoints.size === 0) {
-        clearHudEntity(player);
-        continue;
-      }
-      const equippable = player.getComponent("minecraft:equippable");
-      const mainHandItem = equippable?.getEquipment(EquipmentSlot5.Mainhand);
-      const isBareHand = !mainHandItem || mainHandItem.typeId === "minecraft:air";
-      if (isBareHand && player.isSneaking) {
-        const lookedAt = getLookedAtWaypoint(player, 18);
-        if (lookedAt) {
-          const { waypoint: wp, distance } = lookedAt;
-          const displayName = wp.name ? wp.name : wp.color.nameJa;
-          player.onScreenDisplay.setActionBar(
-            `${wp.color.chatCode}\u25C6 ${displayName} \xA76[${distance}m] \xA77(${wp.x}, ${wp.y}, ${wp.z})`
-          );
-          if (wp.name && wp.name.trim().length > 0) {
-            updateHudEntity(player, wp, distance);
-          } else {
-            clearHudEntity(player);
-          }
-          continue;
-        }
-      }
-      clearHudEntity(player);
-      let closestWp = null;
-      let closestDist = null;
-      for (const [_, wp] of activeWaypoints) {
-        if (wp.dimensionId !== player.dimension.id) continue;
-        const dx = wp.x + 0.5 - player.location.x;
-        const dy = wp.y + 0.5 - player.location.y;
-        const dz = wp.z + 0.5 - player.location.z;
-        const dist = Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz));
-        if (closestDist === null || dist < closestDist) {
-          closestDist = dist;
-          closestWp = wp;
-        }
-      }
-      if (closestWp && closestDist !== null) {
-        const arrow = getDirectionArrow(
-          player,
-          closestWp.x + 0.5,
-          closestWp.z + 0.5
-        );
-        const displayName = closestWp.name ? closestWp.name : closestWp.color.nameJa;
-        player.onScreenDisplay.setActionBar(
-          `${closestWp.color.chatCode}\u25C6 ${displayName} \xA76${closestDist}m \xA7a[${arrow}]`
-        );
-      }
-    }
-  }, 4);
+function createWaypointId(dim, pos) {
+  const shortDim = formatDimId(dim);
+  const x = Math.floor(pos.x);
+  const y = Math.floor(pos.y);
+  const z = Math.floor(pos.z);
+  return `${shortDim}@${x},${y},${z}`;
 }
-function updateHudEntity(player, wp, distance) {
+function saveToStorage() {
   try {
-    const headLoc = player.getHeadLocation();
-    const viewDir = player.getViewDirection();
-    const spawnPos = {
-      x: headLoc.x + viewDir.x * 1.5,
-      y: headLoc.y + viewDir.y * 1.5 - 0.3,
-      // 目線より少し下に調整
-      z: headLoc.z + viewDir.z * 1.5
-    };
-    let hud = playerHudEntities.get(player.id);
-    if (!hud || !hud.isValid) {
-      hud = player.dimension.spawnEntity(
-        "mining_utility:waypoint_marker",
-        spawnPos
-      );
-      playerHudEntities.set(player.id, hud);
-    } else {
-      hud.teleport(spawnPos, { dimension: player.dimension });
-    }
-    hud.nameTag = `${wp.color.chatCode}\u25C6 ${wp.name}
-\xA76[${distance}m]`;
-  } catch {
+    const plainObj = Object.fromEntries(waypoints);
+    world4.setDynamicProperty(STORAGE_KEY, JSON.stringify(plainObj));
+  } catch (e) {
+    console.error(`[Waypoints] \u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F:`, e);
   }
 }
-function clearHudEntity(player) {
-  const hud = playerHudEntities.get(player.id);
-  if (hud && hud.isValid) {
-    hud.nameTag = "";
-  }
-}
-function getTargetWaypointWithinDistance(player, maxDistance = 3, maxAngleDegrees = 45) {
-  const headLoc = player.getHeadLocation();
-  const viewDir = player.getViewDirection();
-  let closestWp = null;
-  let closestDist = maxDistance;
-  const minDot = Math.cos(maxAngleDegrees * Math.PI / 180);
-  for (const [_, wp] of activeWaypoints) {
-    if (wp.dimensionId !== player.dimension.id) continue;
-    const target = { x: wp.x + 0.5, y: wp.y + 0.5, z: wp.z + 0.5 };
-    const dx = target.x - headLoc.x;
-    const dy = target.y - headLoc.y;
-    const dz = target.z - headLoc.z;
-    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (dist > maxDistance) continue;
-    const normX = dx / dist;
-    const normY = dy / dist;
-    const normZ = dz / dist;
-    const dot = viewDir.x * normX + viewDir.y * normY + viewDir.z * normZ;
-    if (dot >= minDot && dist < closestDist) {
-      closestDist = dist;
-      closestWp = wp;
-    }
-  }
-  return closestWp;
-}
-function getLookedAtWaypoint(player, maxAngleDegrees = 18) {
-  const headLoc = player.getHeadLocation();
-  const viewDir = player.getViewDirection();
-  const minDot = Math.cos(maxAngleDegrees * Math.PI / 180);
-  let bestWp = null;
-  let bestDot = minDot;
-  let bestDist = 0;
-  for (const [_, wp] of activeWaypoints) {
-    if (wp.dimensionId !== player.dimension.id) continue;
-    const target = { x: wp.x + 0.5, y: wp.y + 0.5, z: wp.z + 0.5 };
-    const dx = target.x - headLoc.x;
-    const dy = target.y - headLoc.y;
-    const dz = target.z - headLoc.z;
-    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (dist < 1) continue;
-    const normX = dx / dist;
-    const normY = dy / dist;
-    const normZ = dz / dist;
-    const dot = viewDir.x * normX + viewDir.y * normY + viewDir.z * normZ;
-    if (dot > bestDot) {
-      bestDot = dot;
-      bestWp = wp;
-      bestDist = Math.round(dist);
-    }
-  }
-  return bestWp ? { waypoint: bestWp, distance: bestDist } : null;
-}
-function createWaypoint(dimensionId, x, y, z, color, name) {
-  const key = `${dimensionId}:${x},${y},${z}`;
-  const wpName = name?.trim() || "";
-  let entity;
-  try {
-    const dimension = world4.getDimension(dimensionId);
-    entity = dimension.spawnEntity("mining_utility:waypoint_marker", {
-      x: x + 0.5,
-      y: y + 0.1,
-      z: z + 0.5
-    });
-    if (wpName) {
-      entity.nameTag = `${color.chatCode}\u25C6 ${wpName}
-\xA77(${x}, ${y}, ${z})`;
-    } else {
-      entity.nameTag = "";
-    }
-  } catch {
-  }
-  const waypoint = {
-    id: key,
-    dimensionId,
-    x,
-    y,
-    z,
-    name: wpName,
+function addWaypoint(dimension, location, color, name) {
+  const dimId = typeof dimension === "string" ? dimension : dimension.id;
+  const id = createWaypointId(dimId, location);
+  const newWaypoint = {
+    dim: formatDimId(dimId),
+    pos: {
+      x: location.x,
+      y: location.y,
+      z: location.z
+    },
     color,
-    entity
+    name
   };
-  activeWaypoints.set(key, waypoint);
-  return waypoint;
+  waypoints.set(id, newWaypoint);
+  updateCache();
+  saveToStorage();
+  return newWaypoint;
 }
-function deleteWaypoint(id) {
-  const wp = activeWaypoints.get(id);
-  if (!wp) return false;
-  if (wp.entity && wp.entity.isValid) {
-    try {
-      wp.entity.remove();
-    } catch {
-    }
-  }
-  activeWaypoints.delete(id);
-  return true;
+
+// src/waypoint/waypoint.types.ts
+var BANNER_COLOR_NAMES = {
+  0: "black",
+  1: "red",
+  2: "green",
+  3: "brown",
+  4: "blue",
+  5: "purple",
+  6: "cyan",
+  7: "light_gray",
+  8: "gray",
+  9: "pink",
+  10: "lime",
+  11: "yellow",
+  12: "light_blue",
+  13: "magenta",
+  14: "orange",
+  15: "white"
+};
+var BANNER_COLOR_RGBS = {
+  black: { r: 0.1137, g: 0.1137, b: 0.1294 },
+  red: { r: 0.6902, g: 0.1804, b: 0.149 },
+  green: { r: 0.3686, g: 0.4863, b: 0.0863 },
+  brown: { r: 0.5137, g: 0.3294, b: 0.1961 },
+  blue: { r: 0.2353, g: 0.2667, b: 0.6667 },
+  purple: { r: 0.5373, g: 0.1961, b: 0.7216 },
+  cyan: { r: 0.0863, g: 0.6118, b: 0.6118 },
+  light_gray: { r: 0.6157, g: 0.6157, b: 0.5922 },
+  gray: { r: 0.2784, g: 0.3098, b: 0.3216 },
+  pink: { r: 0.9529, g: 0.5451, b: 0.6667 },
+  lime: { r: 0.502, g: 0.7804, b: 0.1216 },
+  yellow: { r: 0.9961, g: 0.8471, b: 0.2392 },
+  light_blue: { r: 0.2275, g: 0.702, b: 0.8549 },
+  magenta: { r: 0.7804, g: 0.3059, b: 0.7412 },
+  orange: { r: 0.9765, g: 0.502, b: 0.1137 },
+  white: { r: 0.9765, g: 1, b: 0.9961 }
+};
+
+// src/waypoint/waypoint-utils.ts
+function spawnWaypointParticle(options) {
+  const { dimension, location, color, size, durationTicks } = options;
+  if (!location) return;
+  const dim = typeof dimension === "string" ? world5.getDimension(
+    dimension.includes(":") ? dimension : `minecraft:${dimension}`
+  ) : dimension;
+  const lifetimeSeconds = Math.max(0.05, durationTicks / 20);
+  const molang = new MolangVariableMap();
+  molang.setFloat("variable.marker_size", Math.max(0.01, size));
+  molang.setFloat("variable.color.r", color.r);
+  molang.setFloat("variable.color.g", color.g);
+  molang.setFloat("variable.color.b", color.b);
+  molang.setFloat("variable.lifetime", lifetimeSeconds);
+  molang.setColorRGB("variable.color", {
+    red: color.r,
+    green: color.g,
+    blue: color.b
+  });
+  dim.spawnParticle("mining_utility:hud_marker", location, molang);
 }
-function toggleWaypointsVisibility(player) {
-  const current = playerWaypointsVisible.get(player.id) ?? true;
-  const next = !current;
-  playerWaypointsVisible.set(player.id, next);
-  if (next) {
-    player.sendMessage("\xA7a[Waypoint] \u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u306E\u8868\u793A\u3092\u3010\u6709\u52B9\u3011\u306B\u3057\u307E\u3057\u305F\u3002");
-    player.playSound("random.orb", { volume: 0.8, pitch: 1.2 });
-  } else {
-    player.sendMessage("\xA77[Waypoint] \u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u306E\u8868\u793A\u3092\u3010\u975E\u8868\u793A\u3011\u306B\u3057\u307E\u3057\u305F\u3002");
-    player.playSound("random.pop", { volume: 0.8, pitch: 0.8 });
-    clearHudEntity(player);
-    player.onScreenDisplay.setActionBar("");
+function spawnWaypointParticleForPlayer(options) {
+  const { player, location, color, size, durationTicks, dimension } = options;
+  if (!player || !player.isValid || !location) return;
+  if (dimension) {
+    const dimId = typeof dimension === "string" ? dimension.includes(":") ? dimension : `minecraft:${dimension}` : dimension.id;
+    if (player.dimension.id !== dimId) return;
   }
-  return next;
-}
-function handleWaypointBlockPlace(event) {
-  const { player, block } = event;
-  const blockTypeId = block.typeId.toLowerCase();
-  if (!blockTypeId.includes("banner")) return;
-  if (!player.isSneaking) {
-    pendingBannerPlacements.delete(player.id);
-    return;
-  }
-  const pending = pendingBannerPlacements.get(player.id);
-  pendingBannerPlacements.delete(player.id);
-  let bannerTypeId = pending?.itemTypeId || "";
-  let nameTag = pending?.nameTag;
-  let locKey = pending?.localizationKey;
-  if (!bannerTypeId) {
-    const equippable = player.getComponent("minecraft:equippable");
-    const mainItem = equippable?.getEquipment(EquipmentSlot5.Mainhand);
-    const offItem = equippable?.getEquipment(EquipmentSlot5.Offhand);
-    const item = mainItem && mainItem.typeId.toLowerCase().includes("banner") ? mainItem : offItem && offItem.typeId.toLowerCase().includes("banner") ? offItem : void 0;
-    if (item) {
-      bannerTypeId = item.typeId;
-      nameTag = nameTag || item.nameTag;
-      locKey = locKey || item.localizationKey;
-    }
-  }
-  const color = extractBannerColor(bannerTypeId, locKey);
-  const customName = nameTag && nameTag.trim().length > 0 ? nameTag.trim() : "";
-  const key = `${player.dimension.id}:${block.x},${block.y},${block.z}`;
-  if (activeWaypoints.has(key)) {
-    deleteWaypoint(key);
-  }
-  createWaypoint(
-    player.dimension.id,
-    block.x,
-    block.y,
-    block.z,
-    color,
-    customName
-  );
-  if (customName) {
-    player.sendMessage(
-      `\xA7e[Waypoint] ${color.chatCode}\u300C${customName}\u300D\xA7e (${color.nameJa}) \u306E\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u3092\u8A2D\u7F6E\u3057\u307E\u3057\u305F\uFF01 \xA77(${block.x}, ${block.y}, ${block.z})`
-    );
-  } else {
-    player.sendMessage(
-      `\xA7e[Waypoint] ${color.chatCode}${color.nameJa}\xA7e\u8272\u306E\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u3092\u8A2D\u7F6E\u3057\u307E\u3057\u305F\uFF01 \xA77(${block.x}, ${block.y}, ${block.z})`
-    );
-  }
-  player.playSound("random.orb", { volume: 0.8, pitch: 1 });
-}
-function handleWaypointBlockInteract(event) {
-  const player = event.player;
-  const item = event.itemStack;
-  if (item) {
-    const itemTypeId = item.typeId.toLowerCase();
-    const locKey = (item.localizationKey || "").toLowerCase();
-    const isBanner = itemTypeId.includes("banner") || locKey.includes("banner");
-    if (isBanner) {
-      if (player.isSneaking) {
-        pendingBannerPlacements.set(player.id, {
-          itemTypeId: item.typeId,
-          nameTag: item.nameTag,
-          localizationKey: item.localizationKey,
-          tick: system4.currentTick
-        });
-      } else {
-        pendingBannerPlacements.delete(player.id);
-      }
-      return;
-    }
-  }
-  if (!player.isSneaking) return;
-  const equippable = player.getComponent("minecraft:equippable");
-  const mainHandItem = equippable?.getEquipment(EquipmentSlot5.Mainhand);
-  const isBareHand = !mainHandItem || mainHandItem.typeId === "minecraft:air";
-  if (!isBareHand) return;
-  const targetWp = getTargetWaypointWithinDistance(player, 3, 45);
-  if (targetWp) {
-    event.cancel = true;
-    const displayName = targetWp.name ? targetWp.name : targetWp.color.nameJa;
-    const colorCode = targetWp.color.chatCode;
-    deleteWaypoint(targetWp.id);
-    player.sendMessage(
-      `\xA7c[Waypoint] \u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u300C${colorCode}${displayName}\xA7c\u300D\u3092\u524A\u9664\u3057\u307E\u3057\u305F\u3002`
-    );
-    player.playSound("random.break", { volume: 0.8, pitch: 1.2 });
-    return;
-  }
-  event.cancel = true;
-  toggleWaypointsVisibility(player);
-}
-function getDirectionArrow(player, targetX, targetZ) {
+  const lifetimeSeconds = Math.max(0.05, durationTicks / 20);
+  const molang = new MolangVariableMap();
+  molang.setFloat("variable.marker_size", Math.max(0.01, size));
+  molang.setFloat("variable.color.r", color.r);
+  molang.setFloat("variable.color.g", color.g);
+  molang.setFloat("variable.color.b", color.b);
+  molang.setFloat("variable.lifetime", lifetimeSeconds);
+  molang.setColorRGB("variable.color", {
+    red: color.r,
+    green: color.g,
+    blue: color.b
+  });
   try {
-    const dx = targetX - player.location.x;
-    const dz = targetZ - player.location.z;
-    if (Math.abs(dx) < 1 && Math.abs(dz) < 1) return "\u2605";
-    let targetAngle = Math.atan2(dx, -dz) * 180 / Math.PI;
-    let playerYaw = player.getRotation().y;
-    let diff = (targetAngle - playerYaw) % 360;
-    if (diff < -180) diff += 360;
-    if (diff > 180) diff -= 360;
-    if (diff >= -22.5 && diff < 22.5) return "\u2191";
-    if (diff >= 22.5 && diff < 67.5) return "\u2197";
-    if (diff >= 67.5 && diff < 112.5) return "\u2192";
-    if (diff >= 112.5 && diff < 157.5) return "\u2198";
-    if (diff >= -67.5 && diff < -22.5) return "\u2196";
-    if (diff >= -112.5 && diff < -67.5) return "\u2190";
-    if (diff >= -157.5 && diff < -112.5) return "\u2199";
-    return "\u2193";
-  } catch {
-    return "\u25C6";
+    player.spawnParticle("mining_utility:hud_marker", location, molang);
+  } catch (e) {
+    console.error("[WaypointUtils] \u30D7\u30EC\u30A4\u30E4\u30FC\u5C02\u7528\u30D1\u30FC\u30C6\u30A3\u30AF\u30EB\u8868\u793A\u30A8\u30E9\u30FC:", e);
   }
 }
-function handleWaypointScriptEvent(event) {
-  const id = event.id.toLowerCase();
-  if (id === "addon:waypoint_minsize" || id === "utility:waypoint_minsize") {
-    const val = parseFloat(event.message.trim());
-    if (!isNaN(val) && val > 0) {
-      setHudMarkerMinSize(val);
-      world4.sendMessage(
-        `\xA7a[Waypoint] \u624B\u524D\u30DE\u30FC\u30AB\u30FC\u306E\u6700\u5C0F\u30B5\u30A4\u30BA\u3092 ${HUD_MARKER_CONFIG.minSize} \u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-      );
+var HUD_MARKER_CONFIG = {
+  baseSize: 1,
+  projectionDistance: 1.5,
+  minSize: 0.03
+};
+function displayHUDWaypoints(player, projectionDistance) {
+  for (let waypoint of waypointCache) {
+    try {
+      const headLoc = player.getHeadLocation();
+      const dimension = player.dimension;
+      const waypointDimension = waypoint.dim.includes(":") ? waypoint.dim : `minecraft:${waypoint.dim}`;
+      if (waypointDimension !== dimension.id) continue;
+      const targetX = waypoint.pos.x;
+      const targetY = waypoint.pos.y;
+      const targetZ = waypoint.pos.z;
+      const dx = targetX - headLoc.x;
+      const dy = targetY - (headLoc.y - 0.5);
+      const dz = targetZ - headLoc.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist < 4) continue;
+      const projDist = projectionDistance;
+      const projX = headLoc.x + dx / dist * projDist;
+      const projY = headLoc.y + dy / dist * projDist;
+      const projZ = headLoc.z + dz / dist * projDist;
+      const apparentSize = HUD_MARKER_CONFIG.baseSize * (projDist / dist);
+      const finalSize = Math.max(HUD_MARKER_CONFIG.minSize, apparentSize);
+      spawnWaypointParticle({
+        dimension: waypointDimension,
+        location: { x: projX, y: projY, z: projZ },
+        color: BANNER_COLOR_RGBS[waypoint.color],
+        size: finalSize,
+        durationTicks: 40
+      });
+    } catch {
     }
   }
 }
 
+// src/waypoint/waypoints.ts
+var lastPlacedBannerName = /* @__PURE__ */ new Map();
+var playerBannerColorCache = /* @__PURE__ */ new Map();
+function initWaypoints() {
+  system4.runInterval(() => {
+    for (let player of world6.getAllPlayers()) {
+      const equippable = player.getComponent("minecraft:equippable");
+      if (!equippable) continue;
+      const mainhandItem = equippable.getEquipment(EquipmentSlot5.Mainhand);
+      if (!mainhandItem || mainhandItem.typeId !== "minecraft:banner") continue;
+      for (let [data, colorName] of Object.entries(BANNER_COLOR_NAMES)) {
+        const res = player.runCommand(
+          `testfor @s [hasitem={item=banner, location=slot.weapon.mainhand, data=${data}}]`
+        );
+        if (res.successCount > 0) {
+          playerBannerColorCache.set(player.id, colorName);
+          break;
+        }
+      }
+    }
+  }, 4);
+  world6.beforeEvents.itemUse.subscribe((event) => {
+    const { source: player, itemStack } = event;
+    player.sendMessage(itemStack.typeId);
+    if (itemStack.typeId === "minecraft:banner") {
+      if (itemStack.nameTag !== void 0) {
+        lastPlacedBannerName.set(player.id, itemStack.nameTag);
+      } else {
+        lastPlacedBannerName.set(player.id, null);
+      }
+    }
+  });
+  world6.afterEvents.playerPlaceBlock.subscribe((event) => {
+    const { block, player } = event;
+    if (block.typeId === "minecraft:standing_banner" || block.typeId === "minecraft:wall_banner") {
+      const placedName = lastPlacedBannerName.get(player.id);
+      const placedColor = playerBannerColorCache.get(player.id);
+      player.sendMessage(`\u65D7\u306E\u540D\u524D\u306F ${placedName ?? "\u4E0D\u660E"} \u3067\u3059`);
+      player.sendMessage(`\u65D7\u306E\u8272\u306F ${placedColor ?? "\u4E0D\u660E"} \u3067\u3059`);
+      if (placedColor && placedName) {
+        addWaypoint(
+          player.dimension,
+          Vector3Utils.add(Vector3Utils.floor(block.location), {
+            x: 0.5,
+            y: 0.5,
+            z: 0.5
+          }),
+          placedColor,
+          placedName
+        );
+      }
+    }
+  });
+  system4.runInterval(() => {
+    for (let waypoint of waypointCache) {
+      spawnWaypointParticle({
+        dimension: waypoint.dim,
+        location: waypoint.pos,
+        color: BANNER_COLOR_RGBS[waypoint.color],
+        size: 1,
+        durationTicks: 11
+      });
+    }
+  }, 10);
+  system4.runInterval(() => {
+    for (let player of world6.getAllPlayers()) {
+      displayHUDWaypoints(player, 1.5);
+      displayHUDWaypoints(player, 2);
+      displayHUDWaypoints(player, 2.5);
+    }
+  }, 40);
+}
+
 // src/map.ts
-import { world as world5, EquipmentSlot as EquipmentSlot6 } from "@minecraft/server";
+import { world as world7, EquipmentSlot as EquipmentSlot6 } from "@minecraft/server";
 var TARGET_MAP_LEVEL = 3;
 var MAP_SIZE = 128 * Math.pow(2, TARGET_MAP_LEVEL);
-world5.afterEvents.itemUse.subscribe((event) => {
+world7.afterEvents.itemUse.subscribe((event) => {
   const player = event.source;
   const item = event.itemStack;
   if (player.isSneaking && item.typeId === "minecraft:filled_map") {
@@ -1970,64 +1731,10 @@ world5.afterEvents.itemUse.subscribe((event) => {
   }
 });
 
-// src/waypoint-utils.ts
-import {
-  world as world6,
-  MolangVariableMap as MolangVariableMap2
-} from "@minecraft/server";
-function spawnWaypointParticle(options) {
-  const { dimension, location, color, size, durationTicks } = options;
-  if (!location) return;
-  const dim = typeof dimension === "string" ? world6.getDimension(
-    dimension.includes(":") ? dimension : `minecraft:${dimension}`
-  ) : dimension;
-  const lifetimeSeconds = Math.max(0.05, durationTicks / 20);
-  const molang = new MolangVariableMap2();
-  molang.setFloat("variable.marker_size", Math.max(0.01, size));
-  molang.setFloat("variable.color_r", color.r);
-  molang.setFloat("variable.color_g", color.g);
-  molang.setFloat("variable.color_b", color.b);
-  molang.setFloat("variable.lifetime", lifetimeSeconds);
-  molang.setColorRGB("variable.color", {
-    red: color.r,
-    green: color.g,
-    blue: color.b
-  });
-  dim.spawnParticle("mining_utility:hud_marker", location, molang);
-}
-function spawnWaypointParticleForPlayer(options) {
-  const { player, location, color, size, durationTicks, dimension } = options;
-  if (!player || !player.isValid || !location) return;
-  if (dimension) {
-    const dimId = typeof dimension === "string" ? dimension.includes(":") ? dimension : `minecraft:${dimension}` : dimension.id;
-    if (player.dimension.id !== dimId) return;
-  }
-  const lifetimeSeconds = Math.max(0.05, durationTicks / 20);
-  const molang = new MolangVariableMap2();
-  molang.setFloat("variable.marker_size", Math.max(0.01, size));
-  molang.setFloat("variable.color_r", color.r);
-  molang.setFloat("variable.color_g", color.g);
-  molang.setFloat("variable.color_b", color.b);
-  molang.setFloat("variable.lifetime", lifetimeSeconds);
-  molang.setColorRGB("variable.color", {
-    red: color.r,
-    green: color.g,
-    blue: color.b
-  });
-  try {
-    player.spawnParticle("mining_utility:hud_marker", location, molang);
-  } catch (e) {
-    console.error("[WaypointUtils] \u30D7\u30EC\u30A4\u30E4\u30FC\u5C02\u7528\u30D1\u30FC\u30C6\u30A3\u30AF\u30EB\u8868\u793A\u30A8\u30E9\u30FC:", e);
-  }
-}
-var displayWaypointParticle = spawnWaypointParticle;
-var displayWaypointParticleForPlayer = spawnWaypointParticleForPlayer;
-var spawnPrivateWaypointParticle = spawnWaypointParticleForPlayer;
-
 // src/index.ts
 system5.run(() => {
   try {
-    world7.gameRules.keepInventory = true;
+    world8.gameRules.keepInventory = true;
   } catch {
   }
   initWaypoints();
@@ -2035,17 +1742,17 @@ system5.run(() => {
     "\xA7a[Mining & Utility Addon] \u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u30FB\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u6A5F\u80FD\u304C\u6B63\u5E38\u306B\u30ED\u30FC\u30C9\u3055\u308C\u307E\u3057\u305F\u3002"
   );
 });
-world7.afterEvents.playerSpawn.subscribe((event) => {
+world8.afterEvents.playerSpawn.subscribe((event) => {
   handleGravePlayerSpawn(event);
 });
-world7.beforeEvents.playerBreakBlock.subscribe((event) => {
+world8.beforeEvents.playerBreakBlock.subscribe((event) => {
   handleGraveBeforeBreak(event);
 });
-world7.afterEvents.playerBreakBlock.subscribe((event) => {
+world8.afterEvents.playerBreakBlock.subscribe((event) => {
   oreMassDestruction(event, ORE_BLOCK_IDS);
   treeMassDestruction(event);
 });
-world7.beforeEvents.itemUse.subscribe((event) => {
+world8.beforeEvents.itemUse.subscribe((event) => {
   handleSettingsItemUse(event, () => {
     event.cancel = true;
   });
@@ -2053,28 +1760,22 @@ world7.beforeEvents.itemUse.subscribe((event) => {
     event.cancel = true;
   });
 });
-world7.afterEvents.entityDie.subscribe((event) => {
+world8.afterEvents.entityDie.subscribe((event) => {
   handleGraveEntityDie(event);
 });
-world7.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+world8.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
-  handleWaypointBlockInteract(event);
-});
-world7.afterEvents.playerPlaceBlock.subscribe((event) => {
-  handleWaypointBlockPlace(event);
 });
 system5.afterEvents.scriptEventReceive.subscribe((event) => {
   try {
     handleSettingsScriptEvent(event);
-    handleWaypointScriptEvent(event);
   } catch (error) {
     console.error("\u30A4\u30D9\u30F3\u30C8\u51E6\u7406\u30A8\u30E9\u30FC:", error);
   }
 });
 export {
-  displayWaypointParticle,
-  displayWaypointParticleForPlayer,
-  spawnPrivateWaypointParticle,
+  HUD_MARKER_CONFIG,
+  displayHUDWaypoints,
   spawnWaypointParticle,
   spawnWaypointParticleForPlayer
 };
