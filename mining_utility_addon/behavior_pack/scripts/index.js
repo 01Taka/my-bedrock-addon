@@ -1483,12 +1483,43 @@ function createWaypointId(dim, pos) {
   const z = Math.floor(pos.z);
   return `${shortDim}@${x},${y},${z}`;
 }
+function isWaypoint(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value;
+  const pos = candidate.pos;
+  return typeof candidate.dim === "string" && typeof candidate.color === "string" && typeof candidate.name === "string" && typeof pos === "object" && pos !== null && typeof pos.x === "number" && typeof pos.y === "number" && typeof pos.z === "number";
+}
 function saveToStorage() {
   try {
     const plainObj = Object.fromEntries(waypoints);
     world4.setDynamicProperty(STORAGE_KEY, JSON.stringify(plainObj));
   } catch (e) {
     console.error(`[Waypoints] \u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F:`, e);
+  }
+}
+function loadWaypoints() {
+  waypoints.clear();
+  try {
+    const rawData = world4.getDynamicProperty(STORAGE_KEY);
+    if (typeof rawData !== "string") {
+      updateCache();
+      return;
+    }
+    const parsed = JSON.parse(rawData);
+    if (typeof parsed !== "object" || parsed === null) {
+      updateCache();
+      return;
+    }
+    for (const [key, value] of Object.entries(parsed)) {
+      if (isWaypoint(value)) {
+        waypoints.set(key, value);
+      }
+    }
+    updateCache();
+    console.warn(`[Waypoints] \u30ED\u30FC\u30C9\u5B8C\u4E86: ${waypoints.size} \u4EF6\u306E\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u3092\u5FA9\u5143\u3057\u307E\u3057\u305F\u3002`);
+  } catch (e) {
+    console.warn(`[Waypoints] \u30D1\u30FC\u30B9\u307E\u305F\u306F\u30ED\u30FC\u30C9\u306B\u5931\u6557\u3057\u307E\u3057\u305F:`, e);
+    updateCache();
   }
 }
 function addWaypoint(dimension, location, color, name) {
@@ -2066,6 +2097,7 @@ function displayHUDWaypoints(player) {
 var lastPlacedBannerName = /* @__PURE__ */ new Map();
 var playerBannerColorCache = /* @__PURE__ */ new Map();
 function initWaypoints() {
+  loadWaypoints();
   system5.runInterval(() => {
     for (let player of world6.getAllPlayers()) {
       const equippable = player.getComponent("minecraft:equippable");

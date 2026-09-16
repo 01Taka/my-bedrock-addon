@@ -10,7 +10,7 @@ import {
   DimensionLocation,
 } from "@minecraft/server";
 import { displayHUDWaypoints, spawnWaypointParticle } from "./waypoint-utils";
-import { addWaypoint, waypointCache } from "./store-waypoint";
+import { addWaypoint, waypointCache, loadWaypoints } from "./store-waypoint";
 import { Vector3Utils } from "@minecraft/math";
 import {
   BANNER_COLOR_NAMES,
@@ -26,6 +26,8 @@ const lastPlacedBannerName = new Map<string, string | null>();
 const playerBannerColorCache = new Map<string, BannerColorName>();
 
 export function initWaypoints() {
+  // 保存されているウェイポイントを DynamicProperty から復元
+  loadWaypoints();
   system.runInterval(() => {
     for (let player of world.getAllPlayers()) {
       const equippable = player.getComponent("minecraft:equippable");

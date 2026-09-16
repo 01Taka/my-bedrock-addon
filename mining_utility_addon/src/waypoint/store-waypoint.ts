@@ -66,15 +66,17 @@ function saveToStorage(): void {
 export function loadWaypoints(): void {
   waypoints.clear();
 
-  const rawData = world.getDynamicProperty(STORAGE_KEY);
-  if (typeof rawData !== "string") {
-    return;
-  }
-
   try {
+    const rawData = world.getDynamicProperty(STORAGE_KEY);
+    if (typeof rawData !== "string") {
+      updateCache();
+      return;
+    }
+
     const parsed: unknown = JSON.parse(rawData);
 
     if (typeof parsed !== "object" || parsed === null) {
+      updateCache();
       return;
     }
 
@@ -82,11 +84,13 @@ export function loadWaypoints(): void {
     for (const [key, value] of Object.entries(parsed)) {
       if (isWaypoint(value)) {
         waypoints.set(key, value);
-        updateCache();
       }
     }
+    updateCache();
+    console.warn(`[Waypoints] ロード完了: ${waypoints.size} 件のウェイポイントを復元しました。`);
   } catch (e) {
-    console.warn(`[Waypoints] パースに失敗しました:`, e);
+    console.warn(`[Waypoints] パースまたはロードに失敗しました:`, e);
+    updateCache();
   }
 }
 
