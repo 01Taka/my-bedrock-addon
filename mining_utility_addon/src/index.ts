@@ -12,8 +12,14 @@ import {
   handleGravePlayerSpawn,
 } from "./grave";
 import { handleSettingsScriptEvent, handleSettingsItemUse } from "./settings";
-import { initWaypoints, handleWaypointScriptEvent } from "./waypoints";
+import {
+  initWaypoints,
+  handleWaypointScriptEvent,
+  handleWaypointBlockInteract,
+  handleWaypointBlockPlace,
+} from "./waypoints";
 import "./map";
+export * from "./waypoint-utils";
 
 // 初期化
 system.run(() => {
@@ -57,9 +63,15 @@ world.afterEvents.entityDie.subscribe((event) => {
   handleGraveEntityDie(event);
 });
 
-// 墓石の右クリック回収
+// ブロックの右クリックインタラクション (墓石回収 / ウェイポイント操作)
 world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
+  handleWaypointBlockInteract(event);
+});
+
+// ブロック設置 (シフトしながら旗を置いた時にウェイポイント作成)
+world.afterEvents.playerPlaceBlock.subscribe((event) => {
+  handleWaypointBlockPlace(event);
 });
 
 // スクリプトイベントコマンド (/scriptevent addon:... /scriptevent utility:...)

@@ -5,7 +5,7 @@
       "identifier": "mining_utility:hud_marker",
       "basic_render_parameters": {
         "material": "particles_alpha",
-        "texture": "textures/particle/particles"
+        "texture": "textures/particle/waypoint_marker"
       }
     },
     "components": {
@@ -17,7 +17,7 @@
       },
       "minecraft:emitter_shape_point": {},
       "minecraft:particle_lifetime_expression": {
-        "max_lifetime": 0.25
+        "max_lifetime": "variable.lifetime ? variable.lifetime : (variable.custom_lifetime ? variable.custom_lifetime : 0.25)"
       },
       "minecraft:particle_initial_speed": 0,
       "minecraft:particle_appearance_billboard": {
@@ -27,23 +27,23 @@
         ],
         "facing_camera_mode": "lookat_xyz",
         "uv": {
-          "texture_width": 128,
-          "texture_height": 128,
+          "texture_width": 16,
+          "texture_height": 16,
           "uv": [
-            16,
-            40
+            0,
+            0
           ],
           "uv_size": [
-            8,
-            8
+            16,
+            16
           ]
         }
       },
       "minecraft:particle_appearance_tinting": {
         "color": [
-          0.2,
-          0.9,
-          1,
+          "variable.color_r",
+          "variable.color_g",
+          "variable.color_b",
           0.95
         ]
       }
