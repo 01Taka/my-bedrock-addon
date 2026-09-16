@@ -1,0 +1,20 @@
+{
+  "format_version": "1.10.0",
+  "minecraft:client_entity": {
+    "description": {
+      "identifier": "mining_utility:waypoint_marker",
+      "materials": {
+        "default": "entity_alphatest"
+      },
+      "textures": {
+        "default": "textures/particle/particles"
+      },
+      "geometry": {
+        "default": "geometry.waypoint_marker"
+      },
+      "render_controllers": [
+        "controller.render.default"
+      ]
+    }
+  }
+}

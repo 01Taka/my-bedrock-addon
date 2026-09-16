@@ -1,7 +1,4 @@
-import {
-  world,
-  system,
-} from "@minecraft/server";
+import { world, system } from "@minecraft/server";
 import {
   ORE_BLOCK_IDS,
   oreMassDestruction,
@@ -14,17 +11,18 @@ import {
   handleGraveBeforeBreak,
   handleGravePlayerSpawn,
 } from "./grave";
-import {
-  handleSettingsScriptEvent,
-  handleSettingsItemUse,
-} from "./settings";
+import { handleSettingsScriptEvent, handleSettingsItemUse } from "./settings";
+import { initWaypoints, handleWaypointScriptEvent } from "./waypoints";
 
 // 初期化
 system.run(() => {
   try {
     world.gameRules.keepInventory = true;
   } catch {}
-  console.warn("§a[Mining & Utility Addon] 採掘・墓・たいまつアドオンが正常にロードされました。");
+  initWaypoints();
+  console.warn(
+    "§a[Mining & Utility Addon] 採掘・墓・たいまつ・ウェイポイント機能が正常にロードされました。",
+  );
 });
 
 // プレイヤー復活時の座標メモ紙付与
@@ -67,7 +65,8 @@ world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
 system.afterEvents.scriptEventReceive.subscribe((event) => {
   try {
     handleSettingsScriptEvent(event);
+    handleWaypointScriptEvent(event);
   } catch (error) {
-    console.error("採掘・墓・たいまつ設定イベント処理エラー:", error);
+    console.error("イベント処理エラー:", error);
   }
 });

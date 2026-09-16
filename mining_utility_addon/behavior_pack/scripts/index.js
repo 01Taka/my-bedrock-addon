@@ -1,8 +1,5 @@
 // src/index.ts
-import {
-  world as world4,
-  system as system4
-} from "@minecraft/server";
+import { world as world5, system as system5 } from "@minecraft/server";
 
 // ../node_modules/@minecraft/math/lib/src/general/clamp.js
 function clampNumber(val, min, max) {
@@ -1455,25 +1452,238 @@ function handleGraveBeforeBreak(event) {
   }
 }
 
-// src/index.ts
-system4.run(() => {
+// src/waypoints.ts
+import {
+  world as world4,
+  system as system4,
+  MolangVariableMap
+} from "@minecraft/server";
+var HUD_MARKER_CONFIG = {
+  baseSize: 0.6,
+  projectionDistance: 1.5,
+  minSize: 0.08
+};
+function setHudMarkerMinSize(minSize) {
+  HUD_MARKER_CONFIG.minSize = Math.max(0.01, minSize);
+}
+function handleWaypointScriptEvent(event) {
+  const id = event.id.toLowerCase();
+  if (id === "addon:waypoint_minsize" || id === "utility:waypoint_minsize") {
+    const val = parseFloat(event.message.trim());
+    if (!isNaN(val) && val > 0) {
+      setHudMarkerMinSize(val);
+      world4.sendMessage(
+        `\xA7a[Waypoint] \u624B\u524D\u30DE\u30FC\u30AB\u30FC\u306E\u6700\u5C0F\u30B5\u30A4\u30BA\u3092 ${HUD_MARKER_CONFIG.minSize} \u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+      );
+    }
+  }
+}
+var activeWaypoints = /* @__PURE__ */ new Map();
+var previousSneakStates = /* @__PURE__ */ new Map();
+function initWaypoints() {
+  world4.afterEvents.playerLeave.subscribe((event) => {
+    previousSneakStates.delete(event.playerId);
+  });
+  system4.runInterval(() => {
+    for (const player of world4.getAllPlayers()) {
+      const isSneaking = player.isSneaking;
+      const wasSneaking = previousSneakStates.get(player.id) ?? false;
+      previousSneakStates.set(player.id, isSneaking);
+      if (isSneaking && !wasSneaking) {
+        handleToggleWaypoint(player);
+      }
+    }
+  }, 1);
+  system4.runInterval(() => {
+    if (activeWaypoints.size === 0) return;
+    const players = world4.getAllPlayers();
+    for (const [key, wp] of activeWaypoints) {
+      try {
+        const dimension = world4.getDimension(wp.dimensionId);
+        if (!wp.entity || !wp.entity.isValid) {
+          wp.entity = dimension.spawnEntity("mining_utility:waypoint_marker", {
+            x: wp.x + 0.5,
+            y: wp.y + 0.1,
+            z: wp.z + 0.5
+          });
+        }
+        let nearestPlayer = null;
+        let minDistance = null;
+        for (const player of players) {
+          if (player.dimension.id !== wp.dimensionId) continue;
+          const dx = player.location.x - (wp.x + 0.5);
+          const dy = player.location.y - (wp.y + 0.5);
+          const dz = player.location.z - (wp.z + 0.5);
+          const dist = Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz));
+          if (minDistance === null || dist < minDistance) {
+            minDistance = dist;
+            nearestPlayer = player;
+          }
+        }
+        const distanceText = minDistance !== null ? ` \xA76[\xA7f${minDistance}m\xA76]` : "";
+        wp.entity.nameTag = `\xA7e\u25C6 \u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8${distanceText}
+\xA77(${wp.x}, ${wp.y}, ${wp.z})`;
+        try {
+          dimension.spawnParticle("mining_utility:waypoint_marker", {
+            x: wp.x + 0.5,
+            y: wp.y + 1.2,
+            z: wp.z + 0.5
+          });
+        } catch {
+        }
+      } catch {
+      }
+    }
+    for (const player of players) {
+      let closestWp = null;
+      let closestDist = null;
+      for (const [_, wp] of activeWaypoints) {
+        if (wp.dimensionId !== player.dimension.id) continue;
+        const dx = wp.x + 0.5 - player.location.x;
+        const dy = wp.y + 0.5 - player.location.y;
+        const dz = wp.z + 0.5 - player.location.z;
+        const dist = Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz));
+        if (closestDist === null || dist < closestDist) {
+          closestDist = dist;
+          closestWp = wp;
+        }
+      }
+      if (closestWp && closestDist !== null) {
+        const arrow = getDirectionArrow(player, closestWp.x + 0.5, closestWp.z + 0.5);
+        player.onScreenDisplay.setActionBar(
+          `\xA7e\u25C6 WP \xA7f(${closestWp.x}, ${closestWp.y}, ${closestWp.z}) \xA76${closestDist}m \xA7a[${arrow}]`
+        );
+      }
+    }
+  }, 10);
+  system4.runInterval(() => {
+    if (activeWaypoints.size === 0) return;
+    for (const player of world4.getAllPlayers()) {
+      try {
+        const headLoc = player.getHeadLocation();
+        const dimension = player.dimension;
+        for (const [_, wp] of activeWaypoints) {
+          if (wp.dimensionId !== dimension.id) continue;
+          const targetX = wp.x + 0.5;
+          const targetY = wp.y + 0.5;
+          const targetZ = wp.z + 0.5;
+          const dx = targetX - headLoc.x;
+          const dy = targetY - headLoc.y;
+          const dz = targetZ - headLoc.z;
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (dist < 2) continue;
+          const projDist = HUD_MARKER_CONFIG.projectionDistance;
+          const projX = headLoc.x + dx / dist * projDist;
+          const projY = headLoc.y + dy / dist * projDist;
+          const projZ = headLoc.z + dz / dist * projDist;
+          const apparentSize = HUD_MARKER_CONFIG.baseSize * (projDist / dist);
+          const finalSize = Math.max(HUD_MARKER_CONFIG.minSize, apparentSize);
+          const molang = new MolangVariableMap();
+          molang.setFloat("variable.marker_size", finalSize);
+          dimension.spawnParticle(
+            "mining_utility:hud_marker",
+            {
+              x: projX,
+              y: projY,
+              z: projZ
+            },
+            molang
+          );
+        }
+      } catch {
+      }
+    }
+  }, 4);
+}
+function getDirectionArrow(player, targetX, targetZ) {
   try {
-    world4.gameRules.keepInventory = true;
+    const dx = targetX - player.location.x;
+    const dz = targetZ - player.location.z;
+    if (Math.abs(dx) < 1 && Math.abs(dz) < 1) return "\u2605";
+    let targetAngle = Math.atan2(dx, -dz) * 180 / Math.PI;
+    let playerYaw = player.getRotation().y;
+    let diff = (targetAngle - playerYaw) % 360;
+    if (diff < -180) diff += 360;
+    if (diff > 180) diff -= 360;
+    if (diff >= -22.5 && diff < 22.5) return "\u2191";
+    if (diff >= 22.5 && diff < 67.5) return "\u2197";
+    if (diff >= 67.5 && diff < 112.5) return "\u2192";
+    if (diff >= 112.5 && diff < 157.5) return "\u2198";
+    if (diff >= -67.5 && diff < -22.5) return "\u2196";
+    if (diff >= -112.5 && diff < -67.5) return "\u2190";
+    if (diff >= -157.5 && diff < -112.5) return "\u2199";
+    return "\u2193";
+  } catch {
+    return "\u25C6";
+  }
+}
+function handleToggleWaypoint(player) {
+  const dimension = player.dimension;
+  const x = Math.floor(player.location.x);
+  const y = Math.floor(player.location.y);
+  const z = Math.floor(player.location.z);
+  const key = `${dimension.id}:${x},${y},${z}`;
+  if (activeWaypoints.has(key)) {
+    const wp = activeWaypoints.get(key);
+    if (wp?.entity && wp.entity.isValid) {
+      try {
+        wp.entity.remove();
+      } catch {
+      }
+    }
+    activeWaypoints.delete(key);
+    player.onScreenDisplay.setActionBar(
+      `\xA7c[Waypoint] \u524A\u9664\u3057\u307E\u3057\u305F: (${x}, ${y}, ${z})`
+    );
+    player.playSound("random.break", { volume: 0.8, pitch: 1.2 });
+  } else {
+    try {
+      const entity = dimension.spawnEntity("mining_utility:waypoint_marker", {
+        x: x + 0.5,
+        y: y + 0.1,
+        z: z + 0.5
+      });
+      entity.nameTag = `\xA7e\u25C6 \u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8 [0m]
+\xA77(${x}, ${y}, ${z})`;
+      activeWaypoints.set(key, {
+        dimensionId: dimension.id,
+        x,
+        y,
+        z,
+        entity
+      });
+      player.onScreenDisplay.setActionBar(
+        `\xA7a[Waypoint] \u751F\u6210\u3057\u307E\u3057\u305F: (${x}, ${y}, ${z})`
+      );
+      player.playSound("random.orb", { volume: 0.8, pitch: 1 });
+    } catch (e) {
+      player.sendMessage(`\xA7c[Waypoint] \u30DE\u30FC\u30AB\u30FC\u306E\u751F\u6210\u306B\u5931\u6557\u3057\u307E\u3057\u305F: ${e}`);
+    }
+  }
+}
+
+// src/index.ts
+system5.run(() => {
+  try {
+    world5.gameRules.keepInventory = true;
   } catch {
   }
-  console.warn("\xA7a[Mining & Utility Addon] \u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u30A2\u30C9\u30AA\u30F3\u304C\u6B63\u5E38\u306B\u30ED\u30FC\u30C9\u3055\u308C\u307E\u3057\u305F\u3002");
+  initWaypoints();
+  console.warn(
+    "\xA7a[Mining & Utility Addon] \u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u30FB\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u6A5F\u80FD\u304C\u6B63\u5E38\u306B\u30ED\u30FC\u30C9\u3055\u308C\u307E\u3057\u305F\u3002"
+  );
 });
-world4.afterEvents.playerSpawn.subscribe((event) => {
+world5.afterEvents.playerSpawn.subscribe((event) => {
   handleGravePlayerSpawn(event);
 });
-world4.beforeEvents.playerBreakBlock.subscribe((event) => {
+world5.beforeEvents.playerBreakBlock.subscribe((event) => {
   handleGraveBeforeBreak(event);
 });
-world4.afterEvents.playerBreakBlock.subscribe((event) => {
+world5.afterEvents.playerBreakBlock.subscribe((event) => {
   oreMassDestruction(event, ORE_BLOCK_IDS);
   treeMassDestruction(event);
 });
-world4.beforeEvents.itemUse.subscribe((event) => {
+world5.beforeEvents.itemUse.subscribe((event) => {
   handleSettingsItemUse(event, () => {
     event.cancel = true;
   });
@@ -1481,16 +1691,17 @@ world4.beforeEvents.itemUse.subscribe((event) => {
     event.cancel = true;
   });
 });
-world4.afterEvents.entityDie.subscribe((event) => {
+world5.afterEvents.entityDie.subscribe((event) => {
   handleGraveEntityDie(event);
 });
-world4.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+world5.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
 });
-system4.afterEvents.scriptEventReceive.subscribe((event) => {
+system5.afterEvents.scriptEventReceive.subscribe((event) => {
   try {
     handleSettingsScriptEvent(event);
+    handleWaypointScriptEvent(event);
   } catch (error) {
-    console.error("\u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u8A2D\u5B9A\u30A4\u30D9\u30F3\u30C8\u51E6\u7406\u30A8\u30E9\u30FC:", error);
+    console.error("\u30A4\u30D9\u30F3\u30C8\u51E6\u7406\u30A8\u30E9\u30FC:", error);
   }
 });

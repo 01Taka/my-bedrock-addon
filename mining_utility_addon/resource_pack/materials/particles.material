@@ -1,0 +1,11 @@
+{
+  "materials": {
+    "version": "1.0.0",
+    "waypoint_particle:particles_alpha": {
+      "+states": [
+        "DisableDepthTest"
+      ],
+      "depthFunc": "Always"
+    }
+  }
+}
