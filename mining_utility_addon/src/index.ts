@@ -15,6 +15,7 @@ import { handleSettingsScriptEvent, handleSettingsItemUse } from "./settings";
 import { initWaypoints } from "./waypoint/waypoints";
 import "./map";
 export * from "./waypoint/waypoint-utils";
+export * from "./waypoint/virtual-nav";
 
 // 初期化
 system.run(() => {

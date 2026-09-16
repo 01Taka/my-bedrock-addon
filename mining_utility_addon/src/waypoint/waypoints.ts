@@ -17,6 +17,8 @@ import {
   BANNER_COLOR_RGBS,
   BannerColorName,
 } from "./waypoint.types";
+import { handleCompassVirtualNav, updatePlayerVirtualNavHUD } from "./virtual-nav";
+export * from "./virtual-nav";
 
 const lastPlacedBannerName = new Map<string, string | null>();
 
@@ -45,7 +47,15 @@ export function initWaypoints() {
 
   world.beforeEvents.itemUse.subscribe((event) => {
     const { source: player, itemStack } = event;
-    player.sendMessage(itemStack.typeId);
+    if (!itemStack) return;
+
+    if (itemStack.typeId === "minecraft:compass") {
+      handleCompassVirtualNav(event, () => {
+        event.cancel = true;
+      });
+      return;
+    }
+
     if (itemStack.typeId === "minecraft:banner") {
       if (itemStack.nameTag !== undefined) {
         lastPlacedBannerName.set(player.id, itemStack.nameTag);
@@ -95,9 +105,11 @@ export function initWaypoints() {
     }
   }, 10);
 
+  // 毎tick更新により、10tickのイージングズームおよび視点追従、ナビゲーションHUDを完全になめらかにする
   system.runInterval(() => {
     for (let player of world.getAllPlayers()) {
+      updatePlayerVirtualNavHUD(player);
       displayHUDWaypoints(player);
     }
-  }, 3);
+  }, 1);
 }

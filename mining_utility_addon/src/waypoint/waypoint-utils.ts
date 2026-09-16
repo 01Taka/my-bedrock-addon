@@ -7,6 +7,14 @@ import {
 } from "@minecraft/server";
 import { waypointCache } from "./store-waypoint";
 import { BANNER_COLOR_RGBS } from "./waypoint.types";
+import {
+  getPlayerVirtualNav,
+  getCurrentVirtualOffset,
+  getFocusedWaypoint,
+  getWaypointKey,
+  isPlayerHoldingCompass,
+  getPinnedWaypointKey,
+} from "./virtual-nav";
 
 /**
  * 変換済みのRGBカラー (0.0 ~ 1.0)
@@ -136,18 +144,42 @@ export function spawnWaypointParticleForPlayer(
   }
 }
 
+export const HUD_GRAY_COLOR: RGBColor = { r: 0.45, g: 0.45, b: 0.45 };
+
 export const HUD_MARKER_CONFIG = {
   baseSize: 1,
   projectionDistance: 1.5,
   minSize: 0.03,
+  maxSize: 2.5,
+  focusZoom: 2.0,
 };
 
 export function displayHUDWaypoints(player: Player) {
+  // コンパスを持っていないプレイヤーにはHUDマーカーを非表示にする
+  if (!isPlayerHoldingCompass(player)) return;
+
+  const headLoc = player.getHeadLocation();
+  const dimension = player.dimension;
+  const offset = getCurrentVirtualOffset(player);
+  const isVirtual =
+    Math.abs(offset.x) > 0.05 ||
+    Math.abs(offset.y) > 0.05 ||
+    Math.abs(offset.z) > 0.05;
+
+  const focusedWp = getFocusedWaypoint(player);
+  const focusedKey = focusedWp ? getWaypointKey(focusedWp) : null;
+
+  const pinnedKey = getPinnedWaypointKey(player);
+  // 固定の際にコンパスを所持して、固定あり、シフトなしの場合、固定されたHUDのパーティクル以外は灰色に変える
+  const isGrayMode = pinnedKey !== null && !player.isSneaking;
+
+  // 仮想前進時の視点座標（前進していない場合は実際の頭座標）
+  const originX = headLoc.x + offset.x;
+  const originY = headLoc.y + offset.y;
+  const originZ = headLoc.z + offset.z;
+
   for (let waypoint of waypointCache) {
     try {
-      const headLoc = player.getHeadLocation();
-      const dimension = player.dimension;
-
       const waypointDimension = waypoint.dim.includes(":")
         ? waypoint.dim
         : `minecraft:${waypoint.dim}`;
@@ -157,30 +189,49 @@ export function displayHUDWaypoints(player: Player) {
       const targetY = waypoint.pos.y;
       const targetZ = waypoint.pos.z;
 
-      const dx = targetX - headLoc.x;
-      const dy = targetY - (headLoc.y - 0.5);
-      const dz = targetZ - headLoc.z;
+      const dx = targetX - originX;
+      const dy = targetY - (originY - 0.5);
+      const dz = targetZ - originZ;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-      // 4m未満の至近距離は実体表示で十分なためスキップ
-      if (dist < 4.0) continue;
+      // 通常時かつ4m未満の至近距離は実体表示で十分なためスキップ
+      if (!isVirtual && dist < 4.0) continue;
 
-      // 投影距離
+      // ゼロ除算防止
+      const safeDist = Math.max(0.1, dist);
+
+      // 投影位置: プレイヤーの現在位置から、仮想視点でのターゲット方向へ投影
       const projDist = HUD_MARKER_CONFIG.projectionDistance;
-      const projX = headLoc.x + (dx / dist) * projDist;
-      const projY = headLoc.y + (dy / dist) * projDist;
-      const projZ = headLoc.z + (dz / dist) * projDist;
+      const projX = headLoc.x + (dx / safeDist) * projDist;
+      const projY = headLoc.y + (dy / safeDist) * projDist;
+      const projZ = headLoc.z + (dz / safeDist) * projDist;
 
       // 相似比に基づく見かけサイズ
-      const apparentSize = HUD_MARKER_CONFIG.baseSize * (projDist / dist);
-      const finalSize = Math.max(HUD_MARKER_CONFIG.minSize, apparentSize);
+      const wpKey = getWaypointKey(waypoint);
+      const isFocused = focusedKey !== null && wpKey === focusedKey;
+      const sizeMultiplier = isFocused ? HUD_MARKER_CONFIG.focusZoom : 1.0;
 
-      spawnWaypointParticle({
+      const apparentSize = HUD_MARKER_CONFIG.baseSize * (projDist / safeDist);
+      const finalSize = Math.min(
+        HUD_MARKER_CONFIG.maxSize,
+        Math.max(HUD_MARKER_CONFIG.minSize, apparentSize) * sizeMultiplier,
+      );
+
+      // 固定されたHUDパーティクル以外は灰色に変える（シフト中は通常色）
+      const isPinned = pinnedKey !== null && wpKey === pinnedKey;
+      const color =
+        isGrayMode && !isPinned
+          ? HUD_GRAY_COLOR
+          : BANNER_COLOR_RGBS[waypoint.color];
+
+      // プレイヤー専用パーティクルとして描画（個人別HUD表示、毎tick更新のため寿命2tick）
+      spawnWaypointParticleForPlayer({
+        player,
         dimension: waypointDimension,
         location: { x: projX, y: projY, z: projZ },
-        color: BANNER_COLOR_RGBS[waypoint.color],
+        color,
         size: finalSize,
-        durationTicks: 3,
+        durationTicks: 2,
       });
     } catch {}
   }

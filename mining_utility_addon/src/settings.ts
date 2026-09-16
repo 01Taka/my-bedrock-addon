@@ -381,7 +381,7 @@ export function handleSettingsScriptEvent(
         `・/scriptevent addon:grave : 墓機能のON/OFF切り替え\n` +
         `・/scriptevent addon:grave_others : 他人の墓の回収のON/OFF切り替え\n` +
         `・/scriptevent addon:status : 現在の設定状態を確認\n` +
-        `§7※ 時計(Clock)またはコンパス(Compass)を持って画面長押し/右クリックでも設定画面が開きます。\n` +
+        `§7※ 時計(Clock)を持って画面長押し/右クリックでも設定画面が開きます。\n` +
         `§a============================`;
       for (const p of targets) {
         p.sendMessage(helpMsg);
@@ -407,9 +407,7 @@ export function handleSettingsItemUse(
   const item = event.itemStack;
   if (!item) return;
 
-  const isClockOrCompass =
-    item.typeId === "minecraft:clock" ||
-    item.typeId === "minecraft:compass";
+  const isClock = item.typeId === "minecraft:clock";
 
   const isSneakTool =
     player.isSneaking &&
@@ -417,7 +415,7 @@ export function handleSettingsItemUse(
       item.typeId === "minecraft:feather" ||
       item.typeId === "minecraft:paper");
 
-  if (isClockOrCompass || isSneakTool) {
+  if (isClock || isSneakTool) {
     cancelCallback();
     system.run(() => {
       showSettingsForm(player);
