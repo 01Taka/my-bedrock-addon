@@ -32,7 +32,7 @@ function createWaypointId(dim: string, pos: Vector3): string {
 }
 
 /**
- * 指定した座標（同ディメンション・同整数ブロック座標）に既にウェイポイントが存在するか判定
+ * 指定した座標（同ディメンション・同整数ブロック座標）に既にウェイポイントが存在するか判定 (O(1))
  */
 export function hasWaypointAt(
   dimension: Dimension | string,
@@ -41,6 +41,18 @@ export function hasWaypointAt(
   const dimId = typeof dimension === "string" ? dimension : dimension.id;
   const id = createWaypointId(dimId, location);
   return waypoints.has(id);
+}
+
+/**
+ * 指定した座標（同ディメンション・同整数ブロック座標）のウェイポイントを取得 (O(1))
+ */
+export function getWaypointAt(
+  dimension: Dimension | string,
+  location: Vector3,
+): Waypoint | undefined {
+  const dimId = typeof dimension === "string" ? dimension : dimension.id;
+  const id = createWaypointId(dimId, location);
+  return waypoints.get(id);
 }
 
 // --- 型ガード（JSON.parse の安全性を担保） ---

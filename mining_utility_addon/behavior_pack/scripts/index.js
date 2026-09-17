@@ -1488,6 +1488,11 @@ function hasWaypointAt(dimension, location) {
   const id = createWaypointId(dimId, location);
   return waypoints.has(id);
 }
+function getWaypointAt(dimension, location) {
+  const dimId = typeof dimension === "string" ? dimension : dimension.id;
+  const id = createWaypointId(dimId, location);
+  return waypoints.get(id);
+}
 function isWaypoint(value) {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value;
@@ -1654,6 +1659,25 @@ import {
 import { world as world5 } from "@minecraft/server";
 var WAYPOINT_MARKER_TYPE = "mining_utility:waypoint_marker";
 var WAYPOINT_MARKER_TAG = "waypoint_marker";
+function getLoweredWaypointKeys() {
+  const loweredKeys = /* @__PURE__ */ new Set();
+  for (const player of world5.getAllPlayers()) {
+    if (!player || !player.isValid) continue;
+    const pLoc = player.location;
+    const px = Math.floor(pLoc.x);
+    const py = Math.floor(pLoc.y);
+    const pz = Math.floor(pLoc.z);
+    const wpBelow1 = getWaypointAt(player.dimension, {
+      x: px,
+      y: py - 1,
+      z: pz
+    });
+    if (wpBelow1) {
+      loweredKeys.add(getWaypointKey(wpBelow1));
+    }
+  }
+  return loweredKeys;
+}
 function resolveDimension(dim) {
   try {
     if (typeof dim !== "string") return dim;
@@ -1729,6 +1753,7 @@ function syncWaypointMarkers() {
     activeKeys.add(key);
     waypointsByKey.set(key, wp);
   }
+  const loweredKeys = getLoweredWaypointKeys();
   const dimensionIds = [
     "minecraft:overworld",
     "minecraft:nether",
@@ -1760,6 +1785,24 @@ function syncWaypointMarkers() {
               if (marker.nameTag !== expectedNameTag) {
                 marker.nameTag = expectedNameTag;
               }
+              const isLowered = loweredKeys.has(key);
+              const targetY = isLowered ? wp.pos.y - 1 : wp.pos.y;
+              const targetPos = {
+                x: wp.pos.x,
+                y: targetY,
+                z: wp.pos.z
+              };
+              const loc = marker.location;
+              const dx = loc.x - targetPos.x;
+              const dy = loc.y - targetPos.y;
+              const dz = loc.z - targetPos.z;
+              if (dx * dx + dy * dy + dz * dz > 25e-4) {
+                try {
+                  marker.teleport(targetPos, { dimension: dim });
+                  marker.clearVelocity();
+                } catch {
+                }
+              }
             }
           }
         }
@@ -1770,6 +1813,56 @@ function syncWaypointMarkers() {
         const key = getWaypointKey(wp);
         if (!spawnedKeysInDim.has(key)) {
           spawnWaypointMarker(dim, wp);
+        }
+      }
+    } catch {
+    }
+  }
+}
+function correctWaypointMarkerPositions() {
+  if (waypointCache.length === 0) return;
+  const loweredKeys = getLoweredWaypointKeys();
+  const waypointsByKey = /* @__PURE__ */ new Map();
+  for (const wp of waypointCache) {
+    waypointsByKey.set(getWaypointKey(wp), wp);
+  }
+  const dimensionIds = [
+    "minecraft:overworld",
+    "minecraft:nether",
+    "minecraft:the_end"
+  ];
+  for (const dimId of dimensionIds) {
+    const dim = resolveDimension(dimId);
+    if (!dim) continue;
+    try {
+      const markers = dim.getEntities({
+        type: WAYPOINT_MARKER_TYPE
+      });
+      for (const marker of markers) {
+        if (!marker.isValid) continue;
+        const tags = marker.getTags();
+        const idTag = tags.find((t) => t.startsWith("wp_id:"));
+        if (!idTag) continue;
+        const key = idTag.replace(/^wp_id:/, "");
+        const wp = waypointsByKey.get(key);
+        if (!wp) continue;
+        const isLowered = loweredKeys.has(key);
+        const targetY = isLowered ? wp.pos.y - 1 : wp.pos.y;
+        const targetPos = {
+          x: wp.pos.x,
+          y: targetY,
+          z: wp.pos.z
+        };
+        const loc = marker.location;
+        const dx = loc.x - targetPos.x;
+        const dy = loc.y - targetPos.y;
+        const dz = loc.z - targetPos.z;
+        if (dx * dx + dy * dy + dz * dz > 25e-4) {
+          try {
+            marker.teleport(targetPos, { dimension: dim });
+            marker.clearVelocity();
+          } catch {
+          }
         }
       }
     } catch {
@@ -2386,6 +2479,12 @@ function initWaypoints() {
         );
       } catch {
       }
+    } else {
+      const bPos = Vector3Utils.floor(block.location);
+      const existingWp = getWaypointAt(player.dimension, bPos);
+      if (existingWp) {
+        spawnWaypointMarker(player.dimension, existingWp);
+      }
     }
   });
   world8.afterEvents.playerLeave.subscribe((event) => {
@@ -2396,6 +2495,12 @@ function initWaypoints() {
     } catch {
     }
   });
+  system5.runInterval(() => {
+    try {
+      correctWaypointMarkerPositions();
+    } catch {
+    }
+  }, 2);
   system5.runInterval(() => {
     for (let waypoint of waypointCache) {
       spawnWaypointParticle({
@@ -2496,10 +2601,12 @@ export {
   WAYPOINT_MARKER_TYPE,
   ZOOM_ANIM_DURATION_TICKS,
   clearPlayerVirtualNav,
+  correctWaypointMarkerPositions,
   displayHUDWaypoints,
   findRayClosestWaypoint,
   getCurrentVirtualOffset,
   getFocusedWaypoint,
+  getLoweredWaypointKeys,
   getPinnedWaypointKey,
   getPlayerVirtualNav,
   getRelative8DirectionArrow,

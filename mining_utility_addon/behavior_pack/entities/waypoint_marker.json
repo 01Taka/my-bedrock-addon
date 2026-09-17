@@ -15,8 +15,17 @@
         ]
       },
       "minecraft:collision_box": {
-        "width": 0.2,
-        "height": 0.2
+        "width": 0.001,
+        "height": 0.001
+      },
+      "minecraft:custom_hit_test": {
+        "hitboxes": [
+          {
+            "pivot": [0, -100, 0],
+            "width": 0.0,
+            "height": 0.0
+          }
+        ]
       },
       "minecraft:physics": {
         "has_collision": false,

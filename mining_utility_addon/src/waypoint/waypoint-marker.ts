@@ -5,10 +5,35 @@ import {
   getWaypointKey,
   BANNER_COLOR_CHAT_CODES,
 } from "./waypoint.types";
-import { waypointCache } from "./store-waypoint";
+import { waypointCache, getWaypointAt } from "./store-waypoint";
 
 export const WAYPOINT_MARKER_TYPE = "mining_utility:waypoint_marker";
 export const WAYPOINT_MARKER_TAG = "waypoint_marker";
+
+/**
+ * プレイヤーがウェイポイントの1マス上（Y+1）に立っているウェイポイントのキー一覧を取得
+ */
+export function getLoweredWaypointKeys(): Set<string> {
+  const loweredKeys = new Set<string>();
+  for (const player of world.getAllPlayers()) {
+    if (!player || !player.isValid) continue;
+    const pLoc = player.location;
+    const px = Math.floor(pLoc.x);
+    const py = Math.floor(pLoc.y);
+    const pz = Math.floor(pLoc.z);
+
+    // プレイヤーが1マス上(Y+1)にいる場合（真下1マスがウェイポイント）
+    const wpBelow1 = getWaypointAt(player.dimension, {
+      x: px,
+      y: py - 1,
+      z: pz,
+    });
+    if (wpBelow1) {
+      loweredKeys.add(getWaypointKey(wpBelow1));
+    }
+  }
+  return loweredKeys;
+}
 
 /**
  * ディメンションオブジェクトを確実に取得
@@ -123,6 +148,8 @@ export function syncWaypointMarkers(): void {
     waypointsByKey.set(key, wp);
   }
 
+  const loweredKeys = getLoweredWaypointKeys();
+
   const dimensionIds = [
     "minecraft:overworld",
     "minecraft:nether",
@@ -153,12 +180,32 @@ export function syncWaypointMarkers(): void {
             } catch {}
           } else {
             spawnedKeysInDim.add(key);
-            // ネームタグが最新の表示名と一致しているか更新
             const wp = waypointsByKey.get(key);
             if (wp) {
+              // ネームタグが最新の表示名と一致しているか更新
               const expectedNameTag = getWaypointMarkerNameTag(wp);
               if (marker.nameTag !== expectedNameTag) {
                 marker.nameTag = expectedNameTag;
+              }
+
+              // 水流やブロック押し出しによる位置ずれの補正、および真上プレイヤー検知による一時降下
+              const isLowered = loweredKeys.has(key);
+              const targetY = isLowered ? wp.pos.y - 1 : wp.pos.y;
+              const targetPos: Vector3 = {
+                x: wp.pos.x,
+                y: targetY,
+                z: wp.pos.z,
+              };
+
+              const loc = marker.location;
+              const dx = loc.x - targetPos.x;
+              const dy = loc.y - targetPos.y;
+              const dz = loc.z - targetPos.z;
+              if (dx * dx + dy * dy + dz * dz > 0.0025) {
+                try {
+                  marker.teleport(targetPos, { dimension: dim });
+                  marker.clearVelocity();
+                } catch {}
               }
             }
           }
@@ -172,6 +219,75 @@ export function syncWaypointMarkers(): void {
         const key = getWaypointKey(wp);
         if (!spawnedKeysInDim.has(key)) {
           spawnWaypointMarker(dim, wp);
+        }
+      }
+    } catch {}
+  }
+}
+
+/**
+ * ウェイポイントマーカーの位置調整および位置ズレ補正
+ * - ウェイポイントの1マス上(Y+1)にプレイヤーがいる場合:
+ *   ネームタグエンティティの座標を一時的に1マス下げて(Y-1)ブロック設置を可能にする
+ * - それ以外の場合:
+ *   本来のウェイポイント座標(Y)に配置
+ * - 水流やピストン等でずれた場合も目標位置へ即座に引き戻す
+ */
+export function correctWaypointMarkerPositions(): void {
+  if (waypointCache.length === 0) return;
+
+  const loweredKeys = getLoweredWaypointKeys();
+
+  const waypointsByKey = new Map<string, Waypoint>();
+  for (const wp of waypointCache) {
+    waypointsByKey.set(getWaypointKey(wp), wp);
+  }
+
+  const dimensionIds = [
+    "minecraft:overworld",
+    "minecraft:nether",
+    "minecraft:the_end",
+  ];
+
+  for (const dimId of dimensionIds) {
+    const dim = resolveDimension(dimId);
+    if (!dim) continue;
+
+    try {
+      const markers = dim.getEntities({
+        type: WAYPOINT_MARKER_TYPE,
+      });
+
+      for (const marker of markers) {
+        if (!marker.isValid) continue;
+
+        const tags = marker.getTags();
+        const idTag = tags.find((t) => t.startsWith("wp_id:"));
+        if (!idTag) continue;
+
+        const key = idTag.replace(/^wp_id:/, "");
+        const wp = waypointsByKey.get(key);
+        if (!wp) continue;
+
+        const isLowered = loweredKeys.has(key);
+        const targetY = isLowered ? wp.pos.y - 1 : wp.pos.y;
+        const targetPos: Vector3 = {
+          x: wp.pos.x,
+          y: targetY,
+          z: wp.pos.z,
+        };
+
+        const loc = marker.location;
+        const dx = loc.x - targetPos.x;
+        const dy = loc.y - targetPos.y;
+        const dz = loc.z - targetPos.z;
+
+        // 0.05m 以上ずれた場合にテレポート & 速度ゼロ化
+        if (dx * dx + dy * dy + dz * dz > 0.0025) {
+          try {
+            marker.teleport(targetPos, { dimension: dim });
+            marker.clearVelocity();
+          } catch {}
         }
       }
     } catch {}

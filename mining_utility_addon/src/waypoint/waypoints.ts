@@ -10,6 +10,7 @@ import {
   waypointCache,
   loadWaypoints,
   hasWaypointAt,
+  getWaypointAt,
 } from "./store-waypoint";
 import { Vector3Utils } from "@minecraft/math";
 import {
@@ -17,13 +18,18 @@ import {
   BANNER_COLOR_RGBS,
   BannerColorName,
   getWaypointDisplayName,
+  getWaypointKey,
 } from "./waypoint.types";
 import {
   handleCompassVirtualNav,
   updatePlayerVirtualNavHUD,
   clearPlayerVirtualNav,
 } from "./virtual-nav";
-import { spawnWaypointMarker, syncWaypointMarkers } from "./waypoint-marker";
+import {
+  spawnWaypointMarker,
+  syncWaypointMarkers,
+  correctWaypointMarkerPositions,
+} from "./waypoint-marker";
 export * from "./virtual-nav";
 export * from "./waypoint-marker";
 
@@ -163,6 +169,14 @@ export function initWaypoints() {
           `§a[Waypoint] §f${player.name} §aがウェイポイント §f${displayName} §aを設置しました`,
         );
       } catch {}
+    } else {
+      // 旗以外の装飾ブロック（石、金ブロック、木等）がウェイポイント座標に設置された場合、
+      // ネームタグマーカーを確実に再スポーン (O(1))
+      const bPos = Vector3Utils.floor(block.location);
+      const existingWp = getWaypointAt(player.dimension, bPos);
+      if (existingWp) {
+        spawnWaypointMarker(player.dimension, existingWp);
+      }
     }
   });
 
@@ -174,6 +188,13 @@ export function initWaypoints() {
       clearPlayerVirtualNav(event.playerId);
     } catch {}
   });
+
+  // プレイヤーが1マス上(Y+1)にいる際の一時降下(Y-1)および位置ズレ補正を2tickごとに更新
+  system.runInterval(() => {
+    try {
+      correctWaypointMarkerPositions();
+    } catch {}
+  }, 2);
 
   // ウェイポイント実体位置のパーティクル表示（全プレイヤーに見える）
   system.runInterval(() => {
