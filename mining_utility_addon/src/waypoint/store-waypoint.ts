@@ -53,7 +53,9 @@ function isWaypoint(value: unknown): value is Waypoint {
   return (
     typeof candidate.dim === "string" &&
     typeof candidate.color === "string" &&
-    typeof candidate.name === "string" &&
+    (candidate.name === null || typeof candidate.name === "string") &&
+    (candidate.creatorId === undefined || typeof candidate.creatorId === "string") &&
+    (candidate.createdAt === undefined || typeof candidate.createdAt === "string") &&
     typeof pos === "object" &&
     pos !== null &&
     typeof pos.x === "number" &&
@@ -113,7 +115,9 @@ export function addWaypoint(
   dimension: Dimension | string,
   location: Vector3,
   color: BannerColorName,
-  name: string,
+  name: string | null,
+  creatorId?: string,
+  createdAt?: string,
 ): Waypoint {
   const dimId = typeof dimension === "string" ? dimension : dimension.id;
   const id = createWaypointId(dimId, location);
@@ -127,6 +131,8 @@ export function addWaypoint(
     },
     color,
     name,
+    creatorId,
+    createdAt: createdAt ?? new Date().toISOString(),
   };
 
   // メモリに追加（既存の同座標データがあれば上書き）

@@ -16,6 +16,7 @@ import { initWaypoints } from "./waypoint/waypoints";
 import "./map";
 export * from "./waypoint/waypoint-utils";
 export * from "./waypoint/virtual-nav";
+export * from "./waypoint/waypoint-marker";
 
 // 初期化
 system.run(() => {

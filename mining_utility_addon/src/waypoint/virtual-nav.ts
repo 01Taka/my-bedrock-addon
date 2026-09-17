@@ -7,7 +7,12 @@ import {
   EquipmentSlot,
 } from "@minecraft/server";
 import { waypointCache, deleteWaypoint } from "./store-waypoint";
-import { Waypoint } from "./waypoint.types";
+import {
+  Waypoint,
+  getWaypointDisplayName,
+  getWaypointKey as getWpKeyFromTypes,
+} from "./waypoint.types";
+import { removeWaypointMarker } from "./waypoint-marker";
 
 export interface VirtualNavState {
   targetOffset: Vector3; // 到達目標オフセット (headLocからの相対ベクトル)
@@ -334,11 +339,15 @@ export function handleCompassVirtualNav(
       if (state.pinnedWaypointKey === deletedKey) {
         state.pinnedWaypointKey = null;
       }
+      // マーカーエンティティ（ネームタグ）を削除
+      removeWaypointMarker(player.dimension, deletedKey, matchedWaypoint.pos);
+
+      const deletedDisplayName = getWaypointDisplayName(matchedWaypoint);
       try {
-        player.sendMessage(`§c[Waypoint] §f${matchedWaypoint.name} §cを削除しました`);
-        player.onScreenDisplay.setActionBar(`§c[Waypoint] §f${matchedWaypoint.name} §cを削除しました`);
+        player.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cを削除しました`);
+        player.onScreenDisplay.setActionBar(`§c[Waypoint] §f${deletedDisplayName} §cを削除しました`);
         player.playSound("random.break", { pitch: 1.2, volume: 1.0 });
-        world.sendMessage(`§c[Waypoint] §f${matchedWaypoint.name} §cが ${player.name} によって削除されました`);
+        world.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cが ${player.name} によって削除されました`);
       } catch {}
       return;
     }
@@ -355,9 +364,10 @@ export function handleCompassVirtualNav(
       const key = getWaypointKey(closestHit.waypoint);
       state.pinnedWaypointKey = key;
       state.unpinNoticeUntilTick = 0;
+      const hitDisplayName = getWaypointDisplayName(closestHit.waypoint);
       try {
         player.onScreenDisplay.setActionBar(
-          `§6[Waypoint] §f${closestHit.waypoint.name} §6を固定しました`,
+          `§6[Waypoint] §f${hitDisplayName} §6を固定しました`,
         );
         player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
       } catch {}
@@ -403,7 +413,7 @@ export function handleCompassVirtualNav(
 
   if (hit) {
     totalStep = PRE_STEP_DISTANCE + hit.additionalDistance;
-    targetName = hit.waypoint.name;
+    targetName = getWaypointDisplayName(hit.waypoint);
   } else {
     totalStep = PRE_STEP_DISTANCE;
   }
@@ -570,14 +580,16 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
     // 現在向いている方角に対する相対8方向矢印
     const arrow = getRelative8DirectionArrow(player, activeWaypoint.pos);
 
+    const activeDisplayName = getWaypointDisplayName(activeWaypoint);
+
     try {
       if (isPinnedActive && isHolding) {
         player.onScreenDisplay.setActionBar(
-          `${zoomPrefix}§6[固定] §e${activeWaypoint.name} §f${realDist}m §b${arrow}`,
+          `${zoomPrefix}§6[固定] §e${activeDisplayName} §f${realDist}m §b${arrow}`,
         );
       } else {
         player.onScreenDisplay.setActionBar(
-          `${zoomPrefix}§e${activeWaypoint.name} §f${realDist}m §b${arrow}`,
+          `${zoomPrefix}§e${activeDisplayName} §f${realDist}m §b${arrow}`,
         );
       }
       state.wasShowingHUD = true;

@@ -16,13 +16,16 @@ import {
   BANNER_COLOR_NAMES,
   BANNER_COLOR_RGBS,
   BannerColorName,
+  getWaypointDisplayName,
 } from "./waypoint.types";
 import {
   handleCompassVirtualNav,
   updatePlayerVirtualNavHUD,
   clearPlayerVirtualNav,
 } from "./virtual-nav";
+import { spawnWaypointMarker, syncWaypointMarkers } from "./waypoint-marker";
 export * from "./virtual-nav";
+export * from "./waypoint-marker";
 
 const lastPlacedBannerName = new Map<string, string | null>();
 
@@ -32,6 +35,20 @@ const playerBannerColorCache = new Map<string, BannerColorName>();
 export function initWaypoints() {
   // 保存されているウェイポイントを DynamicProperty から復元
   loadWaypoints();
+
+  // ワールド読み込み完了後にネームタグマーカーを初期同期
+  system.runTimeout(() => {
+    try {
+      syncWaypointMarkers();
+    } catch {}
+  }, 40);
+
+  // 100 tick (5秒) ごとにマーカーエンティティ（ネームタグ）の整合性を定期同期
+  system.runInterval(() => {
+    try {
+      syncWaypointMarkers();
+    } catch {}
+  }, 100);
 
   // プレイヤーが手に持っている旗の色をキャッシュ
   system.runInterval(() => {
@@ -116,24 +133,34 @@ export function initWaypoints() {
         return;
       }
 
-      const placedName = lastPlacedBannerName.get(player.id);
-      // 名前のない旗はウェイポイントとして登録しない
-      if (!placedName) return;
+      const rawName = lastPlacedBannerName.get(player.id);
+      const placedName = rawName && rawName.trim() !== "" ? rawName : null;
+
+      // 名前がなく、かつスニーク（シフト）していない場合はウェイポイントとして登録しない
+      if (placedName === null && !player.isSneaking) {
+        return;
+      }
 
       // 旗の色（未検出の場合は白にフォールバックして登録失敗を防ぐ）
       const placedColor = playerBannerColorCache.get(player.id) ?? "white";
 
-      addWaypoint(
+      const waypoint = addWaypoint(
         player.dimension,
         waypointPos,
         placedColor,
         placedName,
+        player.id,
       );
+
+      // ウェイポイント座標にネームタグマーカーエンティティを生成（パーティクルと同期）
+      spawnWaypointMarker(player.dimension, waypoint);
+
+      const displayName = getWaypointDisplayName(waypoint);
 
       // 全員に共有されたことを通知
       try {
         world.sendMessage(
-          `§a[Waypoint] §f${player.name} §aがウェイポイント §f${placedName} §aを設置しました`,
+          `§a[Waypoint] §f${player.name} §aがウェイポイント §f${displayName} §aを設置しました`,
         );
       } catch {}
     }

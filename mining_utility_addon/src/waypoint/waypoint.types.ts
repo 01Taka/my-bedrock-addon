@@ -56,10 +56,70 @@ export const BANNER_COLOR_RGBS: Record<BannerColorName, RGB> = {
   white: { r: 0.9765, g: 1.0, b: 0.9961 },
 };
 
+// name -> 日本語名
+export const BANNER_COLOR_JAPANESE: Record<BannerColorName, string> = {
+  black: "黒",
+  red: "赤",
+  green: "緑",
+  brown: "茶",
+  blue: "青",
+  purple: "紫",
+  cyan: "青緑",
+  light_gray: "薄灰色",
+  gray: "灰色",
+  pink: "桃色",
+  lime: "黄緑",
+  yellow: "黄",
+  light_blue: "空色",
+  magenta: "赤紫",
+  orange: "橙",
+  white: "白",
+};
+
+// name -> チャットカラーコード
+export const BANNER_COLOR_CHAT_CODES: Record<BannerColorName, string> = {
+  black: "§0",
+  red: "§c",
+  green: "§2",
+  brown: "§6",
+  blue: "§9",
+  purple: "§5",
+  cyan: "§3",
+  light_gray: "§7",
+  gray: "§8",
+  pink: "§d",
+  lime: "§a",
+  yellow: "§e",
+  light_blue: "§b",
+  magenta: "§5",
+  orange: "§6",
+  white: "§f",
+};
+
 // ウェイポイントの型定義
 export interface Waypoint {
   readonly dim: string;
   readonly pos: Vector3;
   readonly color: BannerColorName;
-  readonly name: string;
+  readonly name: string | null;
+  readonly creatorId?: string; // 配置したプレイヤーID
+  readonly createdAt?: string; // 設置日時 (ISO 8601文字列)
+}
+
+/**
+ * ウェイポイントの一意キーを取得
+ */
+export function getWaypointKey(wp: Waypoint): string {
+  const shortDim = wp.dim.replace(/^minecraft:/, "");
+  return `${shortDim}@${Math.floor(wp.pos.x)},${Math.floor(wp.pos.y)},${Math.floor(wp.pos.z)}`;
+}
+
+/**
+ * ウェイポイントの表示名を取得（name が null または空文字の場合は色の日本語訳を返す）
+ */
+export function getWaypointDisplayName(wp: Waypoint): string {
+  if (wp.name !== null && wp.name.trim() !== "") {
+    return wp.name;
+  }
+  return BANNER_COLOR_JAPANESE[wp.color] ?? "ウェイポイント";
 }
