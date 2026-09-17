@@ -1,8 +1,9 @@
 import {
+  world,
   Player,
   Vector3,
   system,
-  ItemUseBeforeEvent,
+  ItemStack,
   EquipmentSlot,
 } from "@minecraft/server";
 import { waypointCache, deleteWaypoint } from "./store-waypoint";
@@ -52,6 +53,14 @@ function normalize(v: Vector3): Vector3 {
  */
 export function getPlayerVirtualNav(player: Player): VirtualNavState | undefined {
   return playerVirtualNavMap.get(player.id);
+}
+
+/**
+ * プレイヤー退出時に仮想ナビゲーションのキャッシュをクリーンアップ
+ */
+export function clearPlayerVirtualNav(playerId: string): void {
+  playerVirtualNavMap.delete(playerId);
+  playerFocusedWaypointMap.delete(playerId);
 }
 
 /**
@@ -259,14 +268,12 @@ function findTargetWaypointSphereFromPreStep(
  * - シフトなし右クリック: ズーム（仮想前進）
  */
 export function handleCompassVirtualNav(
-  event: ItemUseBeforeEvent,
+  player: Player,
+  itemStack?: ItemStack,
   cancelCallback?: () => void,
 ): void {
-  const player = event.source;
-  if (!(player instanceof Player)) return;
-
-  const item = event.itemStack;
-  if (!item || item.typeId !== "minecraft:compass") return;
+  if (!(player instanceof Player) || !player.isValid) return;
+  if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
 
   const currentTick = system.currentTick;
   let state = playerVirtualNavMap.get(player.id);
@@ -331,6 +338,7 @@ export function handleCompassVirtualNav(
         player.sendMessage(`§c[Waypoint] §f${matchedWaypoint.name} §cを削除しました`);
         player.onScreenDisplay.setActionBar(`§c[Waypoint] §f${matchedWaypoint.name} §cを削除しました`);
         player.playSound("random.break", { pitch: 1.2, volume: 1.0 });
+        world.sendMessage(`§c[Waypoint] §f${matchedWaypoint.name} §cが ${player.name} によって削除されました`);
       } catch {}
       return;
     }

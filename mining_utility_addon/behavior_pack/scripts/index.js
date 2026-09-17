@@ -1,5 +1,5 @@
 // src/index.ts
-import { world as world8, system as system6 } from "@minecraft/server";
+import { world as world9, system as system6 } from "@minecraft/server";
 
 // ../node_modules/@minecraft/math/lib/src/general/clamp.js
 function clampNumber(val, min, max) {
@@ -1454,14 +1454,14 @@ function handleGraveBeforeBreak(event) {
 
 // src/waypoint/waypoints.ts
 import {
-  world as world6,
+  world as world7,
   system as system5,
   EquipmentSlot as EquipmentSlot6
 } from "@minecraft/server";
 
 // src/waypoint/waypoint-utils.ts
 import {
-  world as world5,
+  world as world6,
   MolangVariableMap
 } from "@minecraft/server";
 
@@ -1482,6 +1482,11 @@ function createWaypointId(dim, pos) {
   const y = Math.floor(pos.y);
   const z = Math.floor(pos.z);
   return `${shortDim}@${x},${y},${z}`;
+}
+function hasWaypointAt(dimension, location) {
+  const dimId = typeof dimension === "string" ? dimension : dimension.id;
+  const id = createWaypointId(dimId, location);
+  return waypoints.has(id);
 }
 function isWaypoint(value) {
   if (typeof value !== "object" || value === null) return false;
@@ -1591,6 +1596,7 @@ var BANNER_COLOR_RGBS = {
 
 // src/waypoint/virtual-nav.ts
 import {
+  world as world5,
   Player as Player6,
   system as system4,
   EquipmentSlot as EquipmentSlot5
@@ -1612,6 +1618,10 @@ function normalize(v) {
 }
 function getPlayerVirtualNav(player) {
   return playerVirtualNavMap.get(player.id);
+}
+function clearPlayerVirtualNav(playerId) {
+  playerVirtualNavMap.delete(playerId);
+  playerFocusedWaypointMap.delete(playerId);
 }
 function getPinnedWaypointKey(player) {
   const state = playerVirtualNavMap.get(player.id);
@@ -1736,11 +1746,9 @@ function findTargetWaypointSphereFromPreStep(origin50, direction, dimensionId, r
   }
   return bestHit;
 }
-function handleCompassVirtualNav(event, cancelCallback) {
-  const player = event.source;
-  if (!(player instanceof Player6)) return;
-  const item = event.itemStack;
-  if (!item || item.typeId !== "minecraft:compass") return;
+function handleCompassVirtualNav(player, itemStack, cancelCallback) {
+  if (!(player instanceof Player6) || !player.isValid) return;
+  if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
   const currentTick = system4.currentTick;
   let state = playerVirtualNavMap.get(player.id);
   if (!state) {
@@ -1791,6 +1799,7 @@ function handleCompassVirtualNav(event, cancelCallback) {
         player.sendMessage(`\xA7c[Waypoint] \xA7f${matchedWaypoint.name} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
         player.onScreenDisplay.setActionBar(`\xA7c[Waypoint] \xA7f${matchedWaypoint.name} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
         player.playSound("random.break", { pitch: 1.2, volume: 1 });
+        world5.sendMessage(`\xA7c[Waypoint] \xA7f${matchedWaypoint.name} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`);
       } catch {
       }
       return;
@@ -1990,7 +1999,7 @@ function updatePlayerVirtualNavHUD(player) {
 function spawnWaypointParticle(options) {
   const { dimension, location, color, size, durationTicks } = options;
   if (!location) return;
-  const dim = typeof dimension === "string" ? world5.getDimension(
+  const dim = typeof dimension === "string" ? world6.getDimension(
     dimension.includes(":") ? dimension : `minecraft:${dimension}`
   ) : dimension;
   const lifetimeSeconds = Math.max(0.05, durationTicks / 20);
@@ -2041,6 +2050,7 @@ var HUD_MARKER_CONFIG = {
   focusZoom: 2
 };
 function displayHUDWaypoints(player) {
+  if (!player || !player.isValid) return;
   if (!isPlayerHoldingCompass(player)) return;
   const headLoc = player.getHeadLocation();
   const dimension = player.dimension;
@@ -2099,7 +2109,8 @@ var playerBannerColorCache = /* @__PURE__ */ new Map();
 function initWaypoints() {
   loadWaypoints();
   system5.runInterval(() => {
-    for (let player of world6.getAllPlayers()) {
+    for (let player of world7.getAllPlayers()) {
+      if (!player || !player.isValid) continue;
       const equippable = player.getComponent("minecraft:equippable");
       if (!equippable) continue;
       const mainhandItem = equippable.getEquipment(EquipmentSlot6.Mainhand);
@@ -2115,11 +2126,11 @@ function initWaypoints() {
       }
     }
   }, 4);
-  world6.beforeEvents.itemUse.subscribe((event) => {
+  world7.beforeEvents.itemUse.subscribe((event) => {
     const { source: player, itemStack } = event;
     if (!itemStack) return;
     if (itemStack.typeId === "minecraft:compass") {
-      handleCompassVirtualNav(event, () => {
+      handleCompassVirtualNav(player, itemStack, () => {
         event.cancel = true;
       });
       return;
@@ -2132,25 +2143,58 @@ function initWaypoints() {
       }
     }
   });
-  world6.afterEvents.playerPlaceBlock.subscribe((event) => {
+  world7.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+    const { player, itemStack } = event;
+    if (!itemStack) return;
+    if (itemStack.typeId === "minecraft:compass") {
+      handleCompassVirtualNav(player, itemStack, () => {
+        event.cancel = true;
+      });
+      return;
+    }
+    if (itemStack.typeId === "minecraft:banner") {
+      if (itemStack.nameTag !== void 0) {
+        lastPlacedBannerName.set(player.id, itemStack.nameTag);
+      } else {
+        lastPlacedBannerName.set(player.id, null);
+      }
+    }
+  });
+  world7.afterEvents.playerPlaceBlock.subscribe((event) => {
     const { block, player } = event;
     if (block.typeId === "minecraft:standing_banner" || block.typeId === "minecraft:wall_banner") {
-      const placedName = lastPlacedBannerName.get(player.id);
-      const placedColor = playerBannerColorCache.get(player.id);
-      player.sendMessage(`\u65D7\u306E\u540D\u524D\u306F ${placedName ?? "\u4E0D\u660E"} \u3067\u3059`);
-      player.sendMessage(`\u65D7\u306E\u8272\u306F ${placedColor ?? "\u4E0D\u660E"} \u3067\u3059`);
-      if (placedColor && placedName) {
-        addWaypoint(
-          player.dimension,
-          Vector3Utils.add(Vector3Utils.floor(block.location), {
-            x: 0.5,
-            y: 0.5,
-            z: 0.5
-          }),
-          placedColor,
-          placedName
-        );
+      const blockPos = Vector3Utils.floor(block.location);
+      const waypointPos = Vector3Utils.add(blockPos, {
+        x: 0.5,
+        y: 0.5,
+        z: 0.5
+      });
+      if (hasWaypointAt(player.dimension, waypointPos)) {
+        return;
       }
+      const placedName = lastPlacedBannerName.get(player.id);
+      if (!placedName) return;
+      const placedColor = playerBannerColorCache.get(player.id) ?? "white";
+      addWaypoint(
+        player.dimension,
+        waypointPos,
+        placedColor,
+        placedName
+      );
+      try {
+        world7.sendMessage(
+          `\xA7a[Waypoint] \xA7f${player.name} \xA7a\u304C\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8 \xA7f${placedName} \xA7a\u3092\u8A2D\u7F6E\u3057\u307E\u3057\u305F`
+        );
+      } catch {
+      }
+    }
+  });
+  world7.afterEvents.playerLeave.subscribe((event) => {
+    try {
+      lastPlacedBannerName.delete(event.playerId);
+      playerBannerColorCache.delete(event.playerId);
+      clearPlayerVirtualNav(event.playerId);
+    } catch {
     }
   });
   system5.runInterval(() => {
@@ -2165,18 +2209,22 @@ function initWaypoints() {
     }
   }, 10);
   system5.runInterval(() => {
-    for (let player of world6.getAllPlayers()) {
-      updatePlayerVirtualNavHUD(player);
-      displayHUDWaypoints(player);
+    for (let player of world7.getAllPlayers()) {
+      try {
+        if (!player || !player.isValid) continue;
+        updatePlayerVirtualNavHUD(player);
+        displayHUDWaypoints(player);
+      } catch {
+      }
     }
   }, 1);
 }
 
 // src/map.ts
-import { world as world7, EquipmentSlot as EquipmentSlot7 } from "@minecraft/server";
+import { world as world8, EquipmentSlot as EquipmentSlot7 } from "@minecraft/server";
 var TARGET_MAP_LEVEL = 3;
 var MAP_SIZE = 128 * Math.pow(2, TARGET_MAP_LEVEL);
-world7.afterEvents.itemUse.subscribe((event) => {
+world8.afterEvents.itemUse.subscribe((event) => {
   const player = event.source;
   const item = event.itemStack;
   if (player.isSneaking && item.typeId === "minecraft:filled_map") {
@@ -2201,7 +2249,7 @@ world7.afterEvents.itemUse.subscribe((event) => {
 // src/index.ts
 system6.run(() => {
   try {
-    world8.gameRules.keepInventory = true;
+    world9.gameRules.keepInventory = true;
   } catch {
   }
   initWaypoints();
@@ -2209,17 +2257,17 @@ system6.run(() => {
     "\xA7a[Mining & Utility Addon] \u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u30FB\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u6A5F\u80FD\u304C\u6B63\u5E38\u306B\u30ED\u30FC\u30C9\u3055\u308C\u307E\u3057\u305F\u3002"
   );
 });
-world8.afterEvents.playerSpawn.subscribe((event) => {
+world9.afterEvents.playerSpawn.subscribe((event) => {
   handleGravePlayerSpawn(event);
 });
-world8.beforeEvents.playerBreakBlock.subscribe((event) => {
+world9.beforeEvents.playerBreakBlock.subscribe((event) => {
   handleGraveBeforeBreak(event);
 });
-world8.afterEvents.playerBreakBlock.subscribe((event) => {
+world9.afterEvents.playerBreakBlock.subscribe((event) => {
   oreMassDestruction(event, ORE_BLOCK_IDS);
   treeMassDestruction(event);
 });
-world8.beforeEvents.itemUse.subscribe((event) => {
+world9.beforeEvents.itemUse.subscribe((event) => {
   handleSettingsItemUse(event, () => {
     event.cancel = true;
   });
@@ -2227,10 +2275,10 @@ world8.beforeEvents.itemUse.subscribe((event) => {
     event.cancel = true;
   });
 });
-world8.afterEvents.entityDie.subscribe((event) => {
+world9.afterEvents.entityDie.subscribe((event) => {
   handleGraveEntityDie(event);
 });
-world8.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+world9.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
 });
 system6.afterEvents.scriptEventReceive.subscribe((event) => {
@@ -2246,6 +2294,7 @@ export {
   PRE_STEP_DISTANCE,
   SPHERE_RADIUS,
   ZOOM_ANIM_DURATION_TICKS,
+  clearPlayerVirtualNav,
   displayHUDWaypoints,
   findRayClosestWaypoint,
   getCurrentVirtualOffset,

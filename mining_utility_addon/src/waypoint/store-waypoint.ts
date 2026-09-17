@@ -31,6 +31,18 @@ function createWaypointId(dim: string, pos: Vector3): string {
   return `${shortDim}@${x},${y},${z}`;
 }
 
+/**
+ * 指定した座標（同ディメンション・同整数ブロック座標）に既にウェイポイントが存在するか判定
+ */
+export function hasWaypointAt(
+  dimension: Dimension | string,
+  location: Vector3,
+): boolean {
+  const dimId = typeof dimension === "string" ? dimension : dimension.id;
+  const id = createWaypointId(dimId, location);
+  return waypoints.has(id);
+}
+
 // --- 型ガード（JSON.parse の安全性を担保） ---
 function isWaypoint(value: unknown): value is Waypoint {
   if (typeof value !== "object" || value === null) return false;

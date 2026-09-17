@@ -155,6 +155,8 @@ export const HUD_MARKER_CONFIG = {
 };
 
 export function displayHUDWaypoints(player: Player) {
+  if (!player || !player.isValid) return;
+
   // コンパスを持っていないプレイヤーにはHUDマーカーを非表示にする
   if (!isPlayerHoldingCompass(player)) return;
 
