@@ -36,6 +36,8 @@ export interface VirtualNavState {
   remoteHideClickTick: number;
   // シルクタッチ削除クールダウン用
   lastSilkTouchDeleteTick: number;
+  // リカバリーコンパス: 死亡地点のみ表示モード (false: すべて表示, true: 死亡地点のみ表示)
+  recoveryCompassDeathOnly: boolean;
 }
 
 export const SPHERE_RADIUS = 30.0;
@@ -134,6 +136,7 @@ export function getOrCreatePlayerVirtualNav(player: Player): VirtualNavState {
       remoteHideTargetKey: null,
       remoteHideClickTick: 0,
       lastSilkTouchDeleteTick: 0,
+      recoveryCompassDeathOnly: false,
     };
     playerVirtualNavMap.set(player.id, state);
   }
@@ -158,17 +161,112 @@ export function getPinnedWaypointKey(player: Player): string | null {
 }
 
 /**
- * プレイヤーがメインハンドにコンパスを持っているか判定
+ * プレイヤーがメインハンドにコンパスまたはリカバリーコンパスを持っているか判定
  */
 export function isPlayerHoldingCompass(player: Player): boolean {
   try {
     const equippable = player.getComponent("minecraft:equippable");
     if (!equippable) return false;
     const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
-    return mainhand?.typeId === "minecraft:compass";
+    return (
+      mainhand?.typeId === "minecraft:compass" ||
+      mainhand?.typeId === "minecraft:recovery_compass"
+    );
   } catch {
     return false;
   }
+}
+
+/**
+ * プレイヤーがメインハンドにリカバリーコンパスを持っているか判定
+ */
+export function isPlayerHoldingRecoveryCompass(player: Player): boolean {
+  try {
+    const equippable = player.getComponent("minecraft:equippable");
+    if (!equippable) return false;
+    const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
+    return mainhand?.typeId === "minecraft:recovery_compass";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * プレイヤーがインベントリ内（ホットバー、メインインベントリ、オフハンド含む）にリカバリーコンパスを所持しているか判定
+ */
+export function hasRecoveryCompassInInventory(player: Player): boolean {
+  try {
+    if (!player || !player.isValid) return false;
+
+    // 1. 通常インベントリ（ホットバー含む）の確認
+    const invComp = player.getComponent("minecraft:inventory");
+    const container = invComp?.container;
+    if (container) {
+      for (let i = 0; i < container.size; i++) {
+        const item = container.getItem(i);
+        if (item?.typeId === "minecraft:recovery_compass") {
+          return true;
+        }
+      }
+    }
+
+    // 2. オフハンド・メインハンド装備スロットの確認
+    const equippable = player.getComponent("minecraft:equippable");
+    if (equippable) {
+      const offhand = equippable.getEquipment(EquipmentSlot.Offhand);
+      if (offhand?.typeId === "minecraft:recovery_compass") {
+        return true;
+      }
+      const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
+      if (mainhand?.typeId === "minecraft:recovery_compass") {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * プレイヤーに対して対象ウェイポイントが可視（表示・検出可能）かどうか判定
+ * - source === "death" の場合: 死亡した本人のみ、かつリカバリーコンパス所持時のみ可視
+ * - 通常ウェイポイントの場合: 通常コンパスまたはリカバリーコンパス所持時に可視
+ */
+export function isWaypointVisibleToPlayer(
+  player: Player,
+  waypoint: Waypoint,
+  requireCompassCheck: boolean = true,
+): boolean {
+  if (isWaypointHiddenForPlayer(player, getWaypointKey(waypoint))) {
+    return false;
+  }
+
+  if (waypoint.source === "death") {
+    // 死亡した本人のみ
+    if (waypoint.creatorId && waypoint.creatorId !== player.id) {
+      return false;
+    }
+    // リカバリーコンパスが必要
+    if (requireCompassCheck && !isPlayerHoldingRecoveryCompass(player)) {
+      return false;
+    }
+  } else {
+    // リカバリーコンパス所持時に「死亡地点のみ表示」モードが有効な場合、死亡地点以外は不可視
+    if (isPlayerHoldingRecoveryCompass(player)) {
+      const state = playerVirtualNavMap.get(player.id);
+      if (state?.recoveryCompassDeathOnly) {
+        return false;
+      }
+    }
+    // 通常ウェイポイント
+    if (requireCompassCheck && !isPlayerHoldingCompass(player)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**
@@ -233,8 +331,8 @@ export function findRayClosestWaypoint(
     const wpDim = wp.dim.includes(":") ? wp.dim : `minecraft:${wp.dim}`;
     if (wpDim !== dimensionId) continue;
 
-    // プレイヤーが指定されており、そのプレイヤーが非表示に設定している場合はスキップ
-    if (player && isWaypointHiddenForPlayer(player, getWaypointKey(wp))) {
+    // プレイヤーが指定されており、可視条件を満たさない場合はスキップ
+    if (player && !isWaypointVisibleToPlayer(player, wp, true)) {
       continue;
     }
 
@@ -286,6 +384,13 @@ export function getNearbyToggleableWaypoint(
     const wpDim = wp.dim.replace(/^minecraft:/, "");
     if (wpDim !== currentDim) continue;
 
+    // 死亡ウェイポイントの場合は本人かつリカバリーコンパス所持時のみ対象
+    if (wp.source === "death") {
+      if (wp.creatorId !== player.id || !isPlayerHoldingRecoveryCompass(player)) {
+        continue;
+      }
+    }
+
     const dx = wp.pos.x - headLoc.x;
     const dy = wp.pos.y - headLoc.y;
     const dz = wp.pos.z - headLoc.z;
@@ -308,6 +413,67 @@ export function getNearbyToggleableWaypoint(
     return { waypoint: closeTargetWp, dist: closestDist };
   }
   return null;
+}
+
+/**
+ * プレイヤーが死亡地点ウェイポイントに近接（WAYPOINT_PROXIMITY_RANGE以内）し、
+ * 既存ロジック（30度以内）で視線を合わせた際に自動で削除する
+ */
+export function checkAndAutoDeleteDeathWaypoint(player: Player): boolean {
+  if (!player || !player.isValid) return false;
+
+  const currentDim = player.dimension.id.replace(/^minecraft:/, "");
+  const headLoc = player.getHeadLocation();
+  const viewDir = normalize(player.getViewDirection());
+  const COS_30_DEG = Math.cos((30 * Math.PI) / 180); // 約 0.866 (既存ロジックと同一)
+
+  for (const wp of waypointCache) {
+    if (wp.source !== "death") continue;
+    // 死亡した本人のみ操作（削除）可能
+    if (wp.creatorId !== player.id) continue;
+
+    const wpDim = wp.dim.replace(/^minecraft:/, "");
+    if (wpDim !== currentDim) continue;
+
+    const dx = wp.pos.x - headLoc.x;
+    const dy = wp.pos.y - headLoc.y;
+    const dz = wp.pos.z - headLoc.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    if (dist <= WAYPOINT_PROXIMITY_RANGE && dist > 0.01) {
+      const dirX = dx / dist;
+      const dirY = dy / dist;
+      const dirZ = dz / dist;
+      const dot = viewDir.x * dirX + viewDir.y * dirY + viewDir.z * dirZ;
+
+      if (dot >= COS_30_DEG) {
+        // 条件合致: 自動削除
+        const key = getWaypointKey(wp);
+        deleteWaypoint(player.dimension, wp.pos);
+        removeWaypointMarker(player.dimension, key, wp.pos);
+
+        const state = getPlayerVirtualNav(player);
+        if (state && state.pinnedWaypointKey === key) {
+          state.pinnedWaypointKey = null;
+        }
+
+        const displayName = getWaypointDisplayName(wp);
+        try {
+          player.sendMessage(`§a[Waypoint] ${displayName} に到達したため、ウェイポイントを削除しました`);
+
+          // リカバリーコンパスがインベントリ内にある場合のみHUDとSEを実行
+          if (hasRecoveryCompassInInventory(player)) {
+            player.onScreenDisplay.setActionBar(`§a[Waypoint] ${displayName} に到達したため、ウェイポイントを削除しました`);
+            player.playSound("random.orb", { pitch: 1.2, volume: 1.0 });
+          }
+        } catch {}
+
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -422,6 +588,7 @@ function findTargetWaypointSphereFromPreStep(
   direction: Vector3,
   dimensionId: string,
   radius: number,
+  player?: Player,
 ): RaySphereHit | null {
   let bestHit: RaySphereHit | null = null;
   const r2 = radius * radius;
@@ -429,6 +596,10 @@ function findTargetWaypointSphereFromPreStep(
   for (const wp of waypointCache) {
     const wpDim = wp.dim.includes(":") ? wp.dim : `minecraft:${wp.dim}`;
     if (wpDim !== dimensionId) continue;
+
+    if (player && !isWaypointVisibleToPlayer(player, wp, true)) {
+      continue;
+    }
 
     const dx = origin50.x - wp.pos.x;
     const dy = origin50.y - wp.pos.y;
@@ -478,7 +649,13 @@ export function handleCompassVirtualNav(
   cancelCallback?: () => void,
 ): void {
   if (!(player instanceof Player) || !player.isValid) return;
-  if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
+  if (
+    !itemStack ||
+    (itemStack.typeId !== "minecraft:compass" &&
+      itemStack.typeId !== "minecraft:recovery_compass")
+  ) {
+    return;
+  }
 
   const currentTick = system.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
@@ -625,6 +802,7 @@ export function handleCompassVirtualNav(
     viewDir,
     player.dimension.id,
     SPHERE_RADIUS,
+    player,
   );
 
   let totalStep: number;
@@ -683,8 +861,69 @@ export function handleCompassLeftClick(
   itemStack?: ItemStack,
 ): void {
   if (!(player instanceof Player) || !player.isValid) return;
-  if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
+  if (
+    !itemStack ||
+    (itemStack.typeId !== "minecraft:compass" &&
+      itemStack.typeId !== "minecraft:recovery_compass")
+  ) {
+    return;
+  }
 
+  const isRecoveryCompass = itemStack.typeId === "minecraft:recovery_compass";
+
+  // ----------------------------------------------------
+  // シフトなし状態で左クリックした場合:
+  // - 普通のコンパス: 無視
+  // - リカバリーコンパス: 死亡地点のみ表示 と すべてのウェイポイントを表示 をトグル
+  // ----------------------------------------------------
+  if (!player.isSneaking) {
+    if (!isRecoveryCompass) {
+      // 普通のコンパス: 無視
+      return;
+    }
+
+    const currentTick = system.currentTick;
+    const state = getOrCreatePlayerVirtualNav(player);
+
+    // 連打防止クールダウン (5 tick = 0.25秒)
+    if (currentTick - state.lastLeftClickTick < 5) {
+      return;
+    }
+    state.lastLeftClickTick = currentTick;
+
+    state.recoveryCompassDeathOnly = !state.recoveryCompassDeathOnly;
+
+    const isDeathOnly = state.recoveryCompassDeathOnly;
+    const modeText = isDeathOnly
+      ? "§c[Recovery Compass] 死亡地点のみ表示"
+      : "§a[Recovery Compass] すべてのウェイポイントを表示";
+
+    state.noticeText = modeText;
+    state.noticeUntilTick = currentTick + 20; // 1秒間
+    state.wasShowingHUD = true;
+
+    try {
+      player.onScreenDisplay.setActionBar(modeText);
+    } catch {}
+
+    system.run(() => {
+      try {
+        if (player && player.isValid) {
+          if (isDeathOnly) {
+            player.playSound("random.orb", { pitch: 1.5, volume: 1.0 });
+          } else {
+            player.playSound("random.orb", { pitch: 1.0, volume: 1.0 });
+          }
+        }
+      } catch {}
+    });
+
+    return;
+  }
+
+  // ----------------------------------------------------
+  // シフトあり（スニーク中）: 既存の非表示トグル / 遠隔ダブルクリック非表示処理
+  // ----------------------------------------------------
   const currentTick = system.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
 
@@ -774,31 +1013,58 @@ export function handleCompassLeftClick(
     state.remoteHideTargetKey === wpKey &&
     currentTick - state.remoteHideClickTick <= REMOTE_HIDE_DOUBLE_CLICK_TICKS
   ) {
-    // 2回目クリック: 非表示を実行
+    // 2回目クリック: 実行
     state.remoteHideTargetKey = null;
     state.remoteHideClickTick = 0;
 
-    setWaypointHiddenForPlayer(player, wpKey, true);
+    if (targetWp.source === "death") {
+      // 死亡ウェイポイントの場合は非表示ではなく削除を実行
+      deleteWaypoint(player.dimension, targetWp.pos);
+      removeWaypointMarker(player.dimension, wpKey, targetWp.pos);
 
-    // 固定中なら解除
-    if (state.pinnedWaypointKey === wpKey) {
-      state.pinnedWaypointKey = null;
-    }
+      if (state.pinnedWaypointKey === wpKey) {
+        state.pinnedWaypointKey = null;
+      }
 
-    showWaypointOperationNotice(player, targetWp, "§c[非表示 ■■]");
-    system.run(() => {
+      const displayName = getWaypointDisplayName(targetWp);
+      showWaypointOperationNotice(player, targetWp, "§c[削除 ■■]");
       try {
-        if (player && player.isValid) {
-          player.playSound("random.break", { pitch: 1.0, volume: 0.8 });
-        }
+        player.sendMessage(`§c[Waypoint] ${displayName} を削除しました`);
       } catch {}
-    });
+
+      system.run(() => {
+        try {
+          if (player && player.isValid) {
+            player.playSound("random.break", { pitch: 1.2, volume: 1.0 });
+          }
+        } catch {}
+      });
+    } else {
+      // 通常ウェイポイントの場合は非表示を実行
+      setWaypointHiddenForPlayer(player, wpKey, true);
+
+      // 固定中なら解除
+      if (state.pinnedWaypointKey === wpKey) {
+        state.pinnedWaypointKey = null;
+      }
+
+      showWaypointOperationNotice(player, targetWp, "§c[非表示 ■■]");
+      system.run(() => {
+        try {
+          if (player && player.isValid) {
+            player.playSound("random.break", { pitch: 1.0, volume: 0.8 });
+          }
+        } catch {}
+      });
+    }
   } else {
     // 1回目クリック: 予告HUD表示
     state.remoteHideTargetKey = wpKey;
     state.remoteHideClickTick = currentTick;
 
-    showWaypointOperationNotice(player, targetWp, "§c[非表示 ■□]");
+    const noticeTag =
+      targetWp.source === "death" ? "§c[削除 ■□]" : "§c[非表示 ■□]";
+    showWaypointOperationNotice(player, targetWp, noticeTag);
     system.run(() => {
       try {
         if (player && player.isValid) {
@@ -813,6 +1079,9 @@ export function handleCompassLeftClick(
  * 毎tick実行されるHUDナビゲーション更新＆持ち替え検知処理
  */
 export function updatePlayerVirtualNavHUD(player: Player): void {
+  // 近接かつ視線を合わせた死亡ウェイポイントを自動削除
+  checkAndAutoDeleteDeathWaypoint(player);
+
   const currentTick = system.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
 
@@ -865,6 +1134,18 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
     if (!pinnedWp || isWaypointHiddenForPlayer(player, state.pinnedWaypointKey)) {
       state.pinnedWaypointKey = null;
       pinnedWp = null;
+    } else if (pinnedWp.source === "death") {
+      // 死亡ウェイポイントの場合は本人専用
+      if (pinnedWp.creatorId && pinnedWp.creatorId !== player.id) {
+        state.pinnedWaypointKey = null;
+        pinnedWp = null;
+      } else if (!hasRecoveryCompassInInventory(player)) {
+        // インベントリ内にリカバリーコンパスを持っていない間は表示しない（固定キーは保持）
+        pinnedWp = null;
+      }
+    } else if (isPlayerHoldingRecoveryCompass(player) && state.recoveryCompassDeathOnly) {
+      // 死亡地点のみ表示モード中は通常ウェイポイントの固定表示も一時停止
+      pinnedWp = null;
     }
   }
 
@@ -891,7 +1172,7 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
       isPinnedActive = true;
     }
   } else if (pinnedWp) {
-    // コンパス非所持時でも固定中なら表示
+    // コンパス非所持時でも固定中なら表示（インベントリ内にリカバリーコンパスがあれば死亡地点も表示）
     activeWaypoint = pinnedWp;
     isPinnedActive = true;
   }
@@ -1010,7 +1291,9 @@ export function handleSilkTouchWaypointDelete(
   try {
     player.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cを削除しました`);
     player.onScreenDisplay.setActionBar(`§c[Waypoint] §f${deletedDisplayName} §cを削除しました`);
-    world.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cが ${player.name} によって削除されました`);
+    if (targetWp.source !== "death") {
+      world.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cが ${player.name} によって削除されました`);
+    }
   } catch {}
 
   system.run(() => {

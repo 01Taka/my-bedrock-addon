@@ -9,7 +9,6 @@ import {
   handleGraveEntityDie,
   handleGraveBeforeInteract,
   handleGraveBeforeBreak,
-  handleGravePlayerSpawn,
 } from "./grave";
 import { handleSettingsScriptEvent, handleSettingsItemUse } from "./settings";
 import { initWaypoints } from "./waypoint/waypoints";
@@ -27,11 +26,6 @@ system.run(() => {
   console.warn(
     "§a[Mining & Utility Addon] 採掘・墓・たいまつ・ウェイポイント機能が正常にロードされました。",
   );
-});
-
-// プレイヤー復活時の座標メモ紙付与
-world.afterEvents.playerSpawn.subscribe((event) => {
-  handleGravePlayerSpawn(event);
 });
 
 // クリエイティブでの墓石誤破壊防止

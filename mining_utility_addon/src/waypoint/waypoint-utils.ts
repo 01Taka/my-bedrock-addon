@@ -6,7 +6,11 @@ import {
   Player,
 } from "@minecraft/server";
 import { waypointCache } from "./store-waypoint";
-import { BANNER_COLOR_RGBS, WAYPOINT_PROXIMITY_RANGE } from "./waypoint.types";
+import {
+  BANNER_COLOR_RGBS,
+  WAYPOINT_PROXIMITY_RANGE,
+  getWaypointRGB,
+} from "./waypoint.types";
 import {
   getPlayerVirtualNav,
   getCurrentVirtualOffset,
@@ -16,6 +20,7 @@ import {
   getPinnedWaypointKey,
   isWaypointHiddenForPlayer,
   getNearbyToggleableWaypoint,
+  isWaypointVisibleToPlayer,
 } from "./virtual-nav";
 
 /**
@@ -255,7 +260,7 @@ export function displayHUDWaypoints(player: Player) {
       if (waypointDimension !== dimension.id) continue;
 
       const wpKey = getWaypointKey(waypoint);
-      if (isWaypointHiddenForPlayer(player, wpKey)) continue;
+      if (!isWaypointVisibleToPlayer(player, waypoint, true)) continue;
 
       const targetX = waypoint.pos.x;
       const targetY = waypoint.pos.y;
@@ -293,7 +298,7 @@ export function displayHUDWaypoints(player: Player) {
       const color =
         isGrayMode && !isPinned
           ? HUD_GRAY_COLOR
-          : BANNER_COLOR_RGBS[waypoint.color];
+          : getWaypointRGB(waypoint);
 
       // プレイヤー専用パーティクルとして描画（個人別HUD表示、毎tick更新のため寿命2tick）
       spawnWaypointParticleForPlayer({

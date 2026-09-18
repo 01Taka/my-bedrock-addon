@@ -36,6 +36,11 @@ export const BANNER_COLOR_NAMES = {
 export type BannerColorId = keyof typeof BANNER_COLOR_NAMES;
 export type BannerColorName = (typeof BANNER_COLOR_NAMES)[BannerColorId];
 
+export const DEATH_COLOR_NAME = "death_red" as const;
+export const DEATH_COLOR_RGB: RGB = { r: 1.0, g: 0.0, b: 0.0 }; // 完全な真っ赤
+
+export type WaypointColorName = BannerColorName | typeof DEATH_COLOR_NAME;
+
 // name -> rgb
 export const BANNER_COLOR_RGBS: Record<BannerColorName, RGB> = {
   black: { r: 0.1137, g: 0.1137, b: 0.1294 },
@@ -54,6 +59,11 @@ export const BANNER_COLOR_RGBS: Record<BannerColorName, RGB> = {
   magenta: { r: 0.7804, g: 0.3059, b: 0.7412 },
   orange: { r: 0.9765, g: 0.502, b: 0.1137 },
   white: { r: 0.9765, g: 1.0, b: 0.9961 },
+};
+
+export const WAYPOINT_COLOR_RGBS: Record<WaypointColorName, RGB> = {
+  ...BANNER_COLOR_RGBS,
+  [DEATH_COLOR_NAME]: DEATH_COLOR_RGB,
 };
 
 // name -> 日本語名
@@ -76,6 +86,11 @@ export const BANNER_COLOR_JAPANESE: Record<BannerColorName, string> = {
   white: "白",
 };
 
+export const WAYPOINT_COLOR_JAPANESE: Record<WaypointColorName, string> = {
+  ...BANNER_COLOR_JAPANESE,
+  [DEATH_COLOR_NAME]: "死亡地点",
+};
+
 // name -> チャットカラーコード
 export const BANNER_COLOR_CHAT_CODES: Record<BannerColorName, string> = {
   black: "§0",
@@ -96,6 +111,11 @@ export const BANNER_COLOR_CHAT_CODES: Record<BannerColorName, string> = {
   white: "§f",
 };
 
+export const WAYPOINT_COLOR_CHAT_CODES: Record<WaypointColorName, string> = {
+  ...BANNER_COLOR_CHAT_CODES,
+  [DEATH_COLOR_NAME]: "§c",
+};
+
 /**
  * プレイヤー付近のHUD非表示および表示・非表示のトグル可能範囲（メートル）
  */
@@ -105,10 +125,21 @@ export const WAYPOINT_PROXIMITY_RANGE = 4.0;
 export interface Waypoint {
   readonly dim: string;
   readonly pos: Vector3;
-  readonly color: BannerColorName;
+  readonly color: WaypointColorName;
   readonly name: string | null;
   readonly creatorId?: string; // 配置したプレイヤーID
   readonly createdAt?: string; // 設置日時 (ISO 8601文字列)
+  readonly source?: string; // 生成ソース (例: "death")
+}
+
+/**
+ * ウェイポイントの描画色RGBを取得（死亡地点は完全な真っ赤）
+ */
+export function getWaypointRGB(waypoint: Waypoint): RGB {
+  if (waypoint.source === "death" || waypoint.color === DEATH_COLOR_NAME) {
+    return DEATH_COLOR_RGB;
+  }
+  return WAYPOINT_COLOR_RGBS[waypoint.color] ?? { r: 1, g: 1, b: 1 };
 }
 
 /**
@@ -126,5 +157,5 @@ export function getWaypointDisplayName(wp: Waypoint): string {
   if (wp.name !== null && wp.name.trim() !== "") {
     return wp.name;
   }
-  return BANNER_COLOR_JAPANESE[wp.color] ?? "ウェイポイント";
+  return WAYPOINT_COLOR_JAPANESE[wp.color] ?? "ウェイポイント";
 }

@@ -12,13 +12,11 @@ import {
   EntityDieAfterEvent,
   PlayerInteractWithBlockBeforeEvent,
   PlayerBreakBlockBeforeEvent,
-  PlayerSpawnAfterEvent,
   Player,
 } from "@minecraft/server";
 import { isSettingEnabled, SETTING_KEYS } from "./settings";
 
 interface GraveData {
-  graveId?: string;
   ownerId: string;
   ownerName: string;
   dimensionId?: string;
@@ -29,43 +27,6 @@ interface GraveData {
   origType1: string;
   origType2: string;
   origGroundType: string;
-}
-
-interface GraveLocationInfo {
-  x: number;
-  y: number;
-  z: number;
-  dimensionId: string;
-  graveId?: string;
-}
-
-// 墓メモ紙の識別用プレフィックス
-const GRAVE_PAPER_PREFIX = "§e墓の座標";
-
-/**
- * プレイヤーID、ディメンションID、座標をもとに一意な墓IDを生成する
- */
-export function generateGraveId(
-  playerId: string,
-  dimensionId: string,
-  x: number,
-  y: number,
-  z: number,
-): string {
-  return `grave_${playerId}_${dimensionId}_${x}_${y}_${z}`;
-}
-
-function getDimensionName(id: string): string {
-  switch (id) {
-    case "minecraft:overworld":
-      return "オーバーワールド";
-    case "minecraft:nether":
-      return "ネザー";
-    case "minecraft:the_end":
-      return "ジ・エンド";
-    default:
-      return id;
-  }
 }
 
 /**
@@ -94,7 +55,7 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
 
   const items: ItemStack[] = [];
 
-  // 1. 通常インベントリからアイテムをコピー（墓の座標紙は除外、インベントリからはまだ削除しない）
+  // 1. 通常インベントリからアイテムをコピー（インベントリからはまだ削除しない）
   const invComp = player.getComponent(EntityComponentTypes.Inventory) as
     | EntityInventoryComponent
     | undefined;
@@ -103,19 +64,12 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
     for (let i = 0; i < inv.size; i++) {
       const item = inv.getItem(i);
       if (item) {
-        const isGravePaper =
-          item.typeId === "minecraft:paper" &&
-          (item.nameTag?.startsWith(GRAVE_PAPER_PREFIX) ||
-            item.getDynamicProperty("grave_id") !== undefined);
-
-        if (!isGravePaper) {
-          items.push(item.clone());
-        }
+        items.push(item.clone());
       }
     }
   }
 
-  // 2. 装備・オフハンドからアイテムをコピー（墓の座標紙は除外、まだ削除しない）
+  // 2. 装備・オフハンドからアイテムをコピー（まだ削除しない）
   const equippable = player.getComponent(EntityComponentTypes.Equippable) as
     | EntityEquippableComponent
     | undefined;
@@ -130,14 +84,7 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
     for (const slot of slots) {
       const item = equippable.getEquipment(slot);
       if (item) {
-        const isGravePaper =
-          item.typeId === "minecraft:paper" &&
-          (item.nameTag?.startsWith(GRAVE_PAPER_PREFIX) ||
-            item.getDynamicProperty("grave_id") !== undefined);
-
-        if (!isGravePaper) {
-          items.push(item.clone());
-        }
+        items.push(item.clone());
       }
     }
   }
@@ -199,18 +146,12 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
         }
       }
 
-      // 2. コピー完了後、インベントリおよび装備から墓の紙以外のアイテムを一斉に削除
+      // 2. コピー完了後、インベントリおよび装備からアイテムを一斉に削除
       if (inv) {
         for (let i = 0; i < inv.size; i++) {
           const item = inv.getItem(i);
           if (item) {
-            const isGravePaper =
-              item.typeId === "minecraft:paper" &&
-              (item.nameTag?.startsWith(GRAVE_PAPER_PREFIX) ||
-                item.getDynamicProperty("grave_id") !== undefined);
-            if (!isGravePaper) {
-              inv.setItem(i, undefined);
-            }
+            inv.setItem(i, undefined);
           }
         }
       }
@@ -218,13 +159,7 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
         for (const slot of slots) {
           const item = equippable.getEquipment(slot);
           if (item) {
-            const isGravePaper =
-              item.typeId === "minecraft:paper" &&
-              (item.nameTag?.startsWith(GRAVE_PAPER_PREFIX) ||
-                item.getDynamicProperty("grave_id") !== undefined);
-            if (!isGravePaper) {
-              equippable.setEquipment(slot, undefined);
-            }
+            equippable.setEquipment(slot, undefined);
           }
         }
       }
@@ -255,16 +190,8 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
         const finalPos = targetGraveBlock.location;
         targetGraveBlock.setType("minecraft:bedrock");
 
-        const graveId = generateGraveId(
-          playerId,
-          dimension.id,
-          finalPos.x,
-          finalPos.y,
-          finalPos.z,
-        );
         const graveKey = `grave_${finalPos.x}_${finalPos.y}_${finalPos.z}`;
         const graveData: GraveData = {
-          graveId: graveId,
           ownerId: playerId,
           ownerName: playerName,
           dimensionId: dimension.id,
@@ -279,19 +206,6 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
 
         world.setDynamicProperty(graveKey, JSON.stringify(graveData));
 
-        // 最新の墓の座標を記憶
-        const locationInfo: GraveLocationInfo = {
-          x: finalPos.x,
-          y: finalPos.y,
-          z: finalPos.z,
-          dimensionId: dimension.id,
-          graveId: graveId,
-        };
-        player.setDynamicProperty(
-          "latest_grave_pos",
-          JSON.stringify(locationInfo),
-        );
-
         world.sendMessage(
           `§c${playerName} の墓が生成されました [X: ${finalPos.x}, Y: ${finalPos.y}, Z: ${finalPos.z}]`,
         );
@@ -299,44 +213,6 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
     } catch (e) {
       console.error("墓生成エラー: " + e);
     }
-  });
-}
-
-/**
- * 復活時に墓の座標紙をインベントリに渡すハンドラー
- */
-export function handleGravePlayerSpawn(event: PlayerSpawnAfterEvent): void {
-  if (event.initialSpawn) return;
-
-  const player = event.player;
-  const rawData = player.getDynamicProperty("latest_grave_pos");
-  if (typeof rawData !== "string") return;
-
-  const info: GraveLocationInfo = JSON.parse(rawData);
-  const graveId =
-    info.graveId ||
-    generateGraveId(player.id, info.dimensionId, info.x, info.y, info.z);
-
-  system.run(() => {
-    const invComp = player.getComponent(EntityComponentTypes.Inventory) as
-      | EntityInventoryComponent
-      | undefined;
-    const inv = invComp?.container;
-
-    if (inv) {
-      const paper = new ItemStack("minecraft:paper", 1);
-      paper.nameTag = `${GRAVE_PAPER_PREFIX} [X: ${info.x}, Y: ${info.y}, Z: ${info.z}]`;
-      paper.setDynamicProperty("grave_id", graveId);
-      paper.setLore([
-        `§7世界: ${getDimensionName(info.dimensionId)}`,
-        `§7X: ${info.x}, Y: ${info.y}, Z: ${info.z}`,
-        `§a岩盤を右クリックでアイテムを回収`,
-      ]);
-
-      inv.addItem(paper);
-    }
-
-    player.setDynamicProperty("latest_grave_pos", undefined);
   });
 }
 
@@ -414,56 +290,6 @@ export function handleGraveBeforeInteract(
 
       // 墓データを消去
       world.setDynamicProperty(graveKey, undefined);
-
-      // 対応する墓メモ紙がインベントリまたはオフハンドにあれば削除
-      const targetGraveId =
-        data.graveId ||
-        generateGraveId(
-          data.ownerId,
-          dimension.id,
-          block.location.x,
-          block.location.y,
-          block.location.z,
-        );
-
-      const invComp = player.getComponent(EntityComponentTypes.Inventory) as
-        | EntityInventoryComponent
-        | undefined;
-      const inv = invComp?.container;
-      if (inv) {
-        for (let i = 0; i < inv.size; i++) {
-          const item = inv.getItem(i);
-          if (item && item.typeId === "minecraft:paper") {
-            const itemGraveId = item.getDynamicProperty("grave_id");
-            if (
-              itemGraveId === targetGraveId ||
-              (!itemGraveId &&
-                item.nameTag ===
-                  `${GRAVE_PAPER_PREFIX} [X: ${block.location.x}, Y: ${block.location.y}, Z: ${block.location.z}]`)
-            ) {
-              inv.setItem(i, undefined);
-            }
-          }
-        }
-      }
-
-      const equippable = player.getComponent(EntityComponentTypes.Equippable) as
-        | EntityEquippableComponent
-        | undefined;
-      if (equippable) {
-        const offhandItem = equippable.getEquipment(EquipmentSlot.Offhand);
-        if (offhandItem && offhandItem.typeId === "minecraft:paper") {
-          const itemGraveId = offhandItem.getDynamicProperty("grave_id");
-          if (
-            itemGraveId === targetGraveId ||
-            (!itemGraveId &&
-              offhandItem.nameTag ===
-                `${GRAVE_PAPER_PREFIX} [X: ${block.location.x}, Y: ${block.location.y}, Z: ${block.location.z}]`)
-          ) {
-            equippable.setEquipment(EquipmentSlot.Offhand, undefined);
-          }
-        }
-      }
 
       if (data.ownerId !== player.id) {
         player.sendMessage(

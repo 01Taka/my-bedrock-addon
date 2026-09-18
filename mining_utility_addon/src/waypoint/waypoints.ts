@@ -4,6 +4,7 @@ import {
   EquipmentSlot,
   Vector3,
   ItemStack,
+  Player,
 } from "@minecraft/server";
 import {
   displayHUDWaypoints,
@@ -24,6 +25,8 @@ import {
   BannerColorName,
   getWaypointDisplayName,
   getWaypointKey,
+  DEATH_COLOR_NAME,
+  getWaypointRGB,
 } from "./waypoint.types";
 import {
   handleCompassVirtualNav,
@@ -33,6 +36,9 @@ import {
   isWaypointHiddenForPlayer,
   handleSilkTouchWaypointDelete,
   hasSilkTouchEnchantment,
+  isPlayerHoldingRecoveryCompass,
+  hasRecoveryCompassInInventory,
+  getPlayerVirtualNav,
 } from "./virtual-nav";
 import {
   spawnWaypointMarker,
@@ -92,7 +98,10 @@ export function initWaypoints() {
     const { source: player, itemStack } = event;
     if (!itemStack) return;
 
-    if (itemStack.typeId === "minecraft:compass") {
+    if (
+      itemStack.typeId === "minecraft:compass" ||
+      itemStack.typeId === "minecraft:recovery_compass"
+    ) {
       handleCompassVirtualNav(player, itemStack, () => {
         event.cancel = true;
       });
@@ -122,7 +131,10 @@ export function initWaypoints() {
     const { player, itemStack } = event;
     if (!itemStack) return;
 
-    if (itemStack.typeId === "minecraft:compass") {
+    if (
+      itemStack.typeId === "minecraft:compass" ||
+      itemStack.typeId === "minecraft:recovery_compass"
+    ) {
       handleCompassVirtualNav(player, itemStack, () => {
         event.cancel = true;
       });
@@ -150,31 +162,54 @@ export function initWaypoints() {
   // 腕を振る動作（左クリック）検知: コンパス所持時の非表示（遠隔）および表示・非表示切り替え（近接4m）
   try {
     const afterEvents = world.afterEvents as Record<string, any>;
-    if (afterEvents && typeof afterEvents.playerSwingStart?.subscribe === "function") {
+    if (
+      afterEvents &&
+      typeof afterEvents.playerSwingStart?.subscribe === "function"
+    ) {
       afterEvents.playerSwingStart.subscribe((event: any) => {
         try {
           const { player, heldItemStack } = event;
-          if (!heldItemStack || heldItemStack.typeId !== "minecraft:compass") return;
+          if (
+            !heldItemStack ||
+            (heldItemStack.typeId !== "minecraft:compass" &&
+              heldItemStack.typeId !== "minecraft:recovery_compass")
+          ) {
+            return;
+          }
           handleCompassLeftClick(player, heldItemStack);
         } catch (err) {
           console.warn("[Waypoints] playerSwingStart ハンドラー内エラー:", err);
         }
       });
     } else {
-      console.warn("[Waypoints] 現在の環境では playerSwingStart は未サポートです。");
+      console.warn(
+        "[Waypoints] 現在の環境では playerSwingStart は未サポートです。",
+      );
     }
   } catch (e) {
-    console.warn("[Waypoints] playerSwingStart の登録に失敗しました（スキップ）:", e);
+    console.warn(
+      "[Waypoints] playerSwingStart の登録に失敗しました（スキップ）:",
+      e,
+    );
   }
 
   // playerSwingStart 未サポート環境向けのフォールバック（ブロック左クリック検知）
   try {
     const afterEvents = world.afterEvents as Record<string, any>;
-    if (afterEvents && typeof afterEvents.playerStartBreakingBlock?.subscribe === "function") {
+    if (
+      afterEvents &&
+      typeof afterEvents.playerStartBreakingBlock?.subscribe === "function"
+    ) {
       afterEvents.playerStartBreakingBlock.subscribe((event: any) => {
         try {
           const { player, itemStack } = event;
-          if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
+          if (
+            !itemStack ||
+            (itemStack.typeId !== "minecraft:compass" &&
+              itemStack.typeId !== "minecraft:recovery_compass")
+          ) {
+            return;
+          }
           handleCompassLeftClick(player, itemStack);
         } catch {}
       });
@@ -335,14 +370,29 @@ export function initWaypoints() {
             // 非表示にしているプレイヤーには実体パーティクルを表示しない
             if (isWaypointHiddenForPlayer(player, wpKey)) continue;
 
+            // 死亡ウェイポイントは死亡した本人のみ、かつインベントリ内にリカバリーコンパス所持時のみ表示
+            if (waypoint.source === "death") {
+              if (
+                waypoint.creatorId !== player.id ||
+                !hasRecoveryCompassInInventory(player)
+              ) {
+                continue;
+              }
+            } else if (isPlayerHoldingRecoveryCompass(player)) {
+              // リカバリーコンパスで死亡地点のみ表示モードの場合、死亡地点以外の実体パーティクルを非表示
+              const state = getPlayerVirtualNav(player);
+              if (state?.recoveryCompassDeathOnly) {
+                continue;
+              }
+            }
+
             // 描画距離外（128m超）は負荷軽減のためスキップ
             const dx = waypoint.pos.x - playerPos.x;
             const dy = waypoint.pos.y - playerPos.y;
             const dz = waypoint.pos.z - playerPos.z;
             if (dx * dx + dy * dy + dz * dz > 128 * 128) continue;
 
-            const colorRgb =
-              BANNER_COLOR_RGBS[waypoint.color] ?? { r: 1, g: 1, b: 1 };
+            const colorRgb = getWaypointRGB(waypoint);
             spawnWaypointBodyParticleForPlayer({
               player,
               location: waypoint.pos,
@@ -355,6 +405,67 @@ export function initWaypoints() {
       }
     } catch {}
   }, 10);
+
+  // プレイヤー死亡時（死亡地点ウェイポイントの自動生成）
+  world.afterEvents.entityDie.subscribe((event) => {
+    try {
+      const deadEntity = event.deadEntity;
+      if (!(deadEntity instanceof Player)) return;
+
+      const player = deadEntity;
+      const dim = player.dimension;
+      const minY = dim.heightRange.min;
+      const clampedY = Math.max(player.location.y, minY);
+      const waypointPos: Vector3 = {
+        x: Math.floor(player.location.x) + 0.5,
+        y: Math.floor(clampedY) + 0.5,
+        z: Math.floor(player.location.z) + 0.5,
+      };
+
+      let deathCount = 1;
+      try {
+        const rawCount = player.getDynamicProperty("death_waypoint_count");
+        if (
+          typeof rawCount === "number" &&
+          Number.isFinite(rawCount) &&
+          rawCount >= 0
+        ) {
+          deathCount = Math.floor(rawCount) + 1;
+        }
+        player.setDynamicProperty("death_waypoint_count", deathCount);
+      } catch {
+        const existingDeathWps = waypointCache.filter(
+          (wp) => wp.source === "death" && wp.creatorId === player.id,
+        );
+        deathCount = existingDeathWps.length + 1;
+      }
+
+      const waypointName = `死亡地点${deathCount}`;
+
+      addWaypoint(
+        dim,
+        waypointPos,
+        DEATH_COLOR_NAME,
+        waypointName,
+        player.id,
+        undefined,
+        "death",
+      );
+
+      // ネームタグは表示しないため spawnWaypointMarker は呼び出さない
+
+      try {
+        player.sendMessage(
+          `§c[Waypoint] ${waypointName} にウェイポイントを登録しました（リカバリーコンパスで確認可能）`,
+        );
+      } catch {}
+    } catch (e) {
+      console.warn(
+        "[Waypoints] 死亡ウェイポイント生成中にエラーが発生しました:",
+        e,
+      );
+    }
+  });
 
   // 毎tick更新により、10tickのイージングズームおよび視点追従、各プレイヤー専用ナビゲーションHUDをなめらかに描画
   system.runInterval(() => {

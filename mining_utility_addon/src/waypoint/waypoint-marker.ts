@@ -3,7 +3,7 @@ import {
   Waypoint,
   getWaypointDisplayName,
   getWaypointKey,
-  BANNER_COLOR_CHAT_CODES,
+  WAYPOINT_COLOR_CHAT_CODES,
 } from "./waypoint.types";
 import { waypointCache, getWaypointAt } from "./store-waypoint";
 
@@ -52,7 +52,7 @@ function resolveDimension(dim: Dimension | string): Dimension | null {
  * ウェイポイントのネームタグ用文字列を生成（カラーコード + 表示名）
  */
 export function getWaypointMarkerNameTag(waypoint: Waypoint): string {
-  const colorCode = BANNER_COLOR_CHAT_CODES[waypoint.color] ?? "§f";
+  const colorCode = WAYPOINT_COLOR_CHAT_CODES[waypoint.color] ?? "§f";
   const displayName = getWaypointDisplayName(waypoint);
   return `${colorCode}${displayName}`;
 }
@@ -64,6 +64,9 @@ export function spawnWaypointMarker(
   dimension: Dimension | string,
   waypoint: Waypoint,
 ): Entity | null {
+  // 死亡によるウェイポイントはネームタグを表示しない
+  if (waypoint.source === "death") return null;
+
   const dim = resolveDimension(dimension);
   if (!dim) return null;
 
@@ -143,6 +146,7 @@ export function syncWaypointMarkers(): void {
   const waypointsByKey = new Map<string, Waypoint>();
 
   for (const wp of waypointCache) {
+    if (wp.source === "death") continue;
     const key = getWaypointKey(wp);
     activeKeys.add(key);
     waypointsByKey.set(key, wp);
@@ -215,6 +219,7 @@ export function syncWaypointMarkers(): void {
       // このディメンションに属するウェイポイントのうち、まだマーカーがないものをスポーン試行
       const shortDimId = dimId.replace(/^minecraft:/, "");
       for (const wp of waypointCache) {
+        if (wp.source === "death") continue;
         if (wp.dim !== shortDimId && wp.dim !== dimId) continue;
         const key = getWaypointKey(wp);
         if (!spawnedKeysInDim.has(key)) {

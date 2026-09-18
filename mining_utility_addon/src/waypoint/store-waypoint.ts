@@ -1,5 +1,5 @@
 import { world, Dimension, Vector3 } from "@minecraft/server";
-import { BannerColorName, Waypoint } from "./waypoint.types";
+import { WaypointColorName, Waypoint } from "./waypoint.types";
 
 // 保存用のデータ型
 type SavedWaypoints = Record<string, Waypoint>;
@@ -68,6 +68,7 @@ function isWaypoint(value: unknown): value is Waypoint {
     (candidate.name === null || typeof candidate.name === "string") &&
     (candidate.creatorId === undefined || typeof candidate.creatorId === "string") &&
     (candidate.createdAt === undefined || typeof candidate.createdAt === "string") &&
+    (candidate.source === undefined || typeof candidate.source === "string") &&
     typeof pos === "object" &&
     pos !== null &&
     typeof pos.x === "number" &&
@@ -126,10 +127,11 @@ export function loadWaypoints(): void {
 export function addWaypoint(
   dimension: Dimension | string,
   location: Vector3,
-  color: BannerColorName,
+  color: WaypointColorName,
   name: string | null,
   creatorId?: string,
   createdAt?: string,
+  source?: string,
 ): Waypoint {
   const dimId = typeof dimension === "string" ? dimension : dimension.id;
   const id = createWaypointId(dimId, location);
@@ -145,6 +147,7 @@ export function addWaypoint(
     name,
     creatorId,
     createdAt: createdAt ?? new Date().toISOString(),
+    source,
   };
 
   // メモリに追加（既存の同座標データがあれば上書き）
