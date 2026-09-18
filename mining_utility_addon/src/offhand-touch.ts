@@ -64,15 +64,58 @@ function getOffhandTorchLightLevel(
   return { typeId: offhandItem.typeId, level };
 }
 
+function getLightPosKey(dimensionId: string, pos: Vector3): string {
+  return `${dimensionId}@${pos.x},${pos.y},${pos.z}`;
+}
+
+// アドオンが動的に配置したライトブロック座標の追跡セット（ワールド既存のライトブロックを保護）
+export const addonPlacedLights = new Set<string>();
+
 /**
- * 単一のライトブロックを安全に消去する
+ * 他のプレイヤーが現在その座標を光源として必要としているか判定（プレイヤー同士の消去競合を回避）
  */
-function removeLight(dimension: Dimension, position: Vector3) {
+function isLightNeededByOtherPlayers(
+  excludingPlayerId: string,
+  dimensionId: string,
+  position: Vector3,
+): boolean {
+  for (const [pId, lightData] of activeLights.entries()) {
+    if (pId === excludingPlayerId) continue;
+    if (lightData.dimensionId !== dimensionId) continue;
+    for (const loc of lightData.locations) {
+      if (Vector3Utils.equals(loc, position)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * 単一のライトブロックを安全に消去する（アドオン配置かつ他プレイヤーが使っていない場合のみ）
+ */
+function removeLight(
+  dimension: Dimension,
+  position: Vector3,
+  playerId?: string,
+) {
+  const key = getLightPosKey(dimension.id, position);
+  // アドオンが配置したものでなければ、ワールド既存のライトブロックなので絶対に消去しない
+  if (!addonPlacedLights.has(key)) {
+    return;
+  }
+
+  // 他プレイヤーがこの座標を光源として利用中の場合は消去しない
+  if (playerId && isLightNeededByOtherPlayers(playerId, dimension.id, position)) {
+    return;
+  }
+
   try {
     const block = dimension.getBlock(position);
     if (block && isLightBlock(block.typeId)) {
       block.setType("minecraft:air");
     }
+    addonPlacedLights.delete(key);
   } catch (e) {
     // チャンク未ロード等の例外対策
   }
@@ -90,10 +133,17 @@ function placeLight(
     const block = dimension.getBlock(position);
     if (!block || !isAirOrLightBlock(block.typeId)) return false;
 
+    // もし既にライトブロックが存在し、アドオン配置でない場合はワールド既存のライトなので上書きしない
+    const key = getLightPosKey(dimension.id, position);
+    if (isLightBlock(block.typeId) && !addonPlacedLights.has(key)) {
+      return false;
+    }
+
     const lightPermutation = BlockPermutation.resolve("minecraft:light_block", {
       block_light_level: level,
     });
     block.setPermutation(lightPermutation);
+    addonPlacedLights.add(key);
     return true;
   } catch (e) {
     return false;
@@ -110,7 +160,7 @@ function clearPreviousLight(playerId: string) {
   try {
     const dimension = world.getDimension(previous.dimensionId);
     for (const position of previous.locations) {
-      removeLight(dimension, position);
+      removeLight(dimension, position, playerId);
     }
   } catch (e) {
     // 例外発生時は無視
@@ -268,7 +318,7 @@ system.runInterval(() => {
         Vector3Utils.equals(newPos, prevPos),
       );
       if (!isStillNeeded) {
-        removeLight(dimension, prevPos);
+        removeLight(dimension, prevPos, playerId);
       }
     }
 

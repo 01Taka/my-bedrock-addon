@@ -79,6 +79,7 @@ export function getRecoveryCompassModeDescription(mode: RecoveryCompassMode): st
 }
 
 const pendingCompassGrantPlayerIds = new Set<string>();
+const recoveringGraveKeys = new Set<string>();
 
 /**
  * プレイヤーがリカバリーコンパスを持っていなければインベントリに付与
@@ -225,15 +226,27 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
 
   system.run(() => {
     try {
-      // 地下の空きY座標を探索
+      // 地下の空きY座標を探索（2ブロック分の空きを探す）
       let targetMinY = dimension.heightRange.min + 1;
-      while (targetMinY < dimension.heightRange.min + 20) {
+      while (targetMinY < dimension.heightRange.min + 50) {
         const b1 = dimension.getBlock({
           x: basePos.x,
           y: targetMinY,
           z: basePos.z,
         });
-        if (b1 && b1.typeId !== "minecraft:chest") {
+        const b2 = dimension.getBlock({
+          x: basePos.x + 1,
+          y: targetMinY,
+          z: basePos.z,
+        });
+        if (
+          b1 &&
+          b2 &&
+          b1.typeId !== "minecraft:barrel" &&
+          b1.typeId !== "minecraft:chest" &&
+          b2.typeId !== "minecraft:barrel" &&
+          b2.typeId !== "minecraft:chest"
+        ) {
           break;
         }
         targetMinY++;
@@ -253,8 +266,9 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
       const origType1 = hideBlock1.typeId;
       const origType2 = hideBlock2.typeId;
 
-      hideBlock1.setType("minecraft:chest");
-      hideBlock2.setType("minecraft:chest");
+      // 樽（Barrel）を使用: 27スロット×2＝54スロット確保でき、隣接しても絶対に結合事故が起きない
+      hideBlock1.setType("minecraft:barrel");
+      hideBlock2.setType("minecraft:barrel");
 
       const c1Comp = hideBlock1.getComponent(BlockComponentTypes.Inventory) as
         | BlockInventoryComponent
@@ -378,6 +392,12 @@ export function handleGraveBeforeInteract(
   const dimension = block.dimension;
   const graveKey = `grave_${block.location.x}_${block.location.y}_${block.location.z}`;
 
+  // 既に回収処理が進行中の場合は即座に遮断（同一tick連打や複数人回収によるアイテム増殖防止）
+  if (recoveringGraveKeys.has(graveKey)) {
+    event.cancel = true;
+    return;
+  }
+
   const rawData = world.getDynamicProperty(graveKey);
   if (typeof rawData !== "string") return;
 
@@ -396,6 +416,9 @@ export function handleGraveBeforeInteract(
       return;
     }
   }
+
+  // 回収ロックを取得
+  recoveringGraveKeys.add(graveKey);
 
   system.run(() => {
     try {
@@ -432,7 +455,7 @@ export function handleGraveBeforeInteract(
         }
       }
 
-      // 地下のチェストを復元
+      // 地下の保管コンテナ（樽）を復元
       if (hideBlock1) hideBlock1.setType(data.origType1);
       if (hideBlock2) hideBlock2.setType(data.origType2);
 
@@ -451,6 +474,9 @@ export function handleGraveBeforeInteract(
       }
     } catch (e) {
       console.error("墓回収エラー: " + e);
+    } finally {
+      // 処理完了後にロック解除
+      recoveringGraveKeys.delete(graveKey);
     }
   });
 }

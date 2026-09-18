@@ -86,9 +86,34 @@ export function getPlayerSettings(_player?: Player | null): PlayerSettings {
 }
 
 /**
+ * プレイヤーが管理者（OPまたはadmin/opタグ所持者）であるか判定
+ * マルチプレイでの一般プレイヤーによるワールド設定誤操作・いたずらを防止
+ */
+export function isPlayerAdmin(player: Player): boolean {
+  try {
+    if (typeof (player as any).isOp === "function" && (player as any).isOp()) {
+      return true;
+    }
+  } catch {}
+  if (player.hasTag("admin") || player.hasTag("op")) {
+    return true;
+  }
+  // シングルプレイ（ワールドにプレイヤーが1人しかいない場合）は設定許可
+  if (world.getAllPlayers().length <= 1) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * 設定UI（ModalForm）を表示
  */
 export function showSettingsForm(player: Player): void {
+  if (!isPlayerAdmin(player)) {
+    player.sendMessage("§c[設定] ワールド設定を変更する権限（OP権限またはadminタグ）がありません。");
+    return;
+  }
+
   const current = getPlayerSettings(player);
   const currentCompassMode = getRecoveryCompassMode();
 
@@ -442,6 +467,11 @@ export function handleSettingsItemUse(
 
   // 設定用アイテム: 木の剣 (長押し / 右クリックで設定画面を開く)
   if (item.typeId === "minecraft:wooden_sword") {
+    // 管理者でなければ設定画面を開かず、通常の武器使用動作を継続させる
+    if (!isPlayerAdmin(player)) {
+      return;
+    }
+
     cancelCallback();
     system.run(() => {
       showSettingsForm(player);

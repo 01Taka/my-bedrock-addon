@@ -4,8 +4,9 @@ import { WaypointColorName, Waypoint } from "./waypoint.types";
 // 保存用のデータ型
 type SavedWaypoints = Record<string, Waypoint>;
 
-// プロパティキー
-const STORAGE_KEY = "waypoints";
+// 個別プロパティ用プレフィックス（単一プロパティ32KB上限対策）
+const WP_PREFIX = "wp:";
+const LEGACY_STORAGE_KEY = "waypoints";
 
 // メモリ上で保持する Map
 export const waypoints = new Map<string, Waypoint>();
@@ -77,46 +78,56 @@ function isWaypoint(value: unknown): value is Waypoint {
   );
 }
 
-// 内部用：永続化処理
-function saveToStorage(): void {
-  try {
-    const plainObj: SavedWaypoints = Object.fromEntries(waypoints);
-    world.setDynamicProperty(STORAGE_KEY, JSON.stringify(plainObj));
-  } catch (e) {
-    console.error(`[Waypoints] 保存に失敗しました:`, e);
-  }
-}
-
 // ===================================================
 // 1. ロード処理（ワールド起動時などに実行）
 // ===================================================
 export function loadWaypoints(): void {
   waypoints.clear();
 
+  // 1. 旧形式（単一JSONキー "waypoints"）からの自動移行
   try {
-    const rawData = world.getDynamicProperty(STORAGE_KEY);
-    if (typeof rawData !== "string") {
-      updateCache();
-      return;
+    const legacyRaw = world.getDynamicProperty(LEGACY_STORAGE_KEY);
+    if (typeof legacyRaw === "string") {
+      const parsed: unknown = JSON.parse(legacyRaw);
+      if (typeof parsed === "object" && parsed !== null) {
+        for (const [key, value] of Object.entries(parsed)) {
+          if (isWaypoint(value)) {
+            waypoints.set(key, value);
+            try {
+              world.setDynamicProperty(`${WP_PREFIX}${key}`, JSON.stringify(value));
+            } catch {}
+          }
+        }
+      }
+      // 移行完了後に旧キーを消去
+      world.setDynamicProperty(LEGACY_STORAGE_KEY, undefined);
+      console.warn(`[Waypoints] 旧形式データから ${waypoints.size} 件を個別キーへ正常移行しました。`);
     }
+  } catch (e) {
+    console.warn(`[Waypoints] レガシーデータ移行処理エラー:`, e);
+  }
 
-    const parsed: unknown = JSON.parse(rawData);
-
-    if (typeof parsed !== "object" || parsed === null) {
-      updateCache();
-      return;
-    }
-
-    // 読み込んだオブジェクトを型チェックしながら Map に復元
-    for (const [key, value] of Object.entries(parsed)) {
-      if (isWaypoint(value)) {
-        waypoints.set(key, value);
+  // 2. 個別プロパティからのロード (wp:*)
+  try {
+    const allPropIds = world.getDynamicPropertyIds();
+    for (const propId of allPropIds) {
+      if (propId.startsWith(WP_PREFIX)) {
+        const raw = world.getDynamicProperty(propId);
+        if (typeof raw === "string") {
+          try {
+            const parsed: unknown = JSON.parse(raw);
+            if (isWaypoint(parsed)) {
+              const wpKey = propId.substring(WP_PREFIX.length);
+              waypoints.set(wpKey, parsed);
+            }
+          } catch {}
+        }
       }
     }
     updateCache();
     console.warn(`[Waypoints] ロード完了: ${waypoints.size} 件のウェイポイントを復元しました。`);
   } catch (e) {
-    console.warn(`[Waypoints] パースまたはロードに失敗しました:`, e);
+    console.warn(`[Waypoints] 個別プロパティのロードに失敗しました:`, e);
     updateCache();
   }
 }
@@ -154,8 +165,12 @@ export function addWaypoint(
   waypoints.set(id, newWaypoint);
   updateCache();
 
-  // 永続化
-  saveToStorage();
+  // 個別DynamicPropertyとして永続化（32KB制限の完全回避）
+  try {
+    world.setDynamicProperty(`${WP_PREFIX}${id}`, JSON.stringify(newWaypoint));
+  } catch (e) {
+    console.error(`[Waypoints] 個別プロパティ保存エラー [${id}]:`, e);
+  }
 
   return newWaypoint;
 }
@@ -174,8 +189,12 @@ export function deleteWaypoint(
   updateCache();
 
   if (existed) {
-    // データが存在して削除できた時のみセーブを走らせる
-    saveToStorage();
+    // 個別DynamicPropertyを削除
+    try {
+      world.setDynamicProperty(`${WP_PREFIX}${id}`, undefined);
+    } catch (e) {
+      console.error(`[Waypoints] 個別プロパティ削除エラー [${id}]:`, e);
+    }
   }
 
   return existed;

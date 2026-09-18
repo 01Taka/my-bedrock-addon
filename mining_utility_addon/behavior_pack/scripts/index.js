@@ -1,5 +1,5 @@
 // src/index.ts
-import { world as world10, system as system6 } from "@minecraft/server";
+import { world as world10, system as system7 } from "@minecraft/server";
 
 // ../node_modules/@minecraft/math/lib/src/general/clamp.js
 function clampNumber(val, min, max) {
@@ -249,7 +249,8 @@ import { BlockVolume } from "@minecraft/server";
 // src/mass-destruction.ts
 import {
   EquipmentSlot as EquipmentSlot3,
-  GameMode
+  GameMode,
+  system as system3
 } from "@minecraft/server";
 
 // src/utils.ts
@@ -341,6 +342,7 @@ function getRecoveryCompassModeDescription(mode) {
   }
 }
 var pendingCompassGrantPlayerIds = /* @__PURE__ */ new Set();
+var recoveringGraveKeys = /* @__PURE__ */ new Set();
 function giveRecoveryCompassIfMissing(player) {
   try {
     const invComp = player.getComponent(EntityComponentTypes.Inventory);
@@ -447,13 +449,18 @@ function handleGraveEntityDie(event) {
   system.run(() => {
     try {
       let targetMinY = dimension.heightRange.min + 1;
-      while (targetMinY < dimension.heightRange.min + 20) {
+      while (targetMinY < dimension.heightRange.min + 50) {
         const b1 = dimension.getBlock({
           x: basePos.x,
           y: targetMinY,
           z: basePos.z
         });
-        if (b1 && b1.typeId !== "minecraft:chest") {
+        const b2 = dimension.getBlock({
+          x: basePos.x + 1,
+          y: targetMinY,
+          z: basePos.z
+        });
+        if (b1 && b2 && b1.typeId !== "minecraft:barrel" && b1.typeId !== "minecraft:chest" && b2.typeId !== "minecraft:barrel" && b2.typeId !== "minecraft:chest") {
           break;
         }
         targetMinY++;
@@ -469,8 +476,8 @@ function handleGraveEntityDie(event) {
       if (!hideBlock1 || !hideBlock2) return;
       const origType1 = hideBlock1.typeId;
       const origType2 = hideBlock2.typeId;
-      hideBlock1.setType("minecraft:chest");
-      hideBlock2.setType("minecraft:chest");
+      hideBlock1.setType("minecraft:barrel");
+      hideBlock2.setType("minecraft:barrel");
       const c1Comp = hideBlock1.getComponent(BlockComponentTypes.Inventory);
       const c2Comp = hideBlock2.getComponent(BlockComponentTypes.Inventory);
       const c1 = c1Comp?.container;
@@ -560,6 +567,10 @@ function handleGraveBeforeInteract(event) {
   const player = event.player;
   const dimension = block.dimension;
   const graveKey = `grave_${block.location.x}_${block.location.y}_${block.location.z}`;
+  if (recoveringGraveKeys.has(graveKey)) {
+    event.cancel = true;
+    return;
+  }
   const rawData = world.getDynamicProperty(graveKey);
   if (typeof rawData !== "string") return;
   event.cancel = true;
@@ -574,6 +585,7 @@ function handleGraveBeforeInteract(event) {
       return;
     }
   }
+  recoveringGraveKeys.add(graveKey);
   system.run(() => {
     try {
       const hideBlock1 = dimension.getBlock({
@@ -618,6 +630,8 @@ function handleGraveBeforeInteract(event) {
       }
     } catch (e) {
       console.error("\u5893\u56DE\u53CE\u30A8\u30E9\u30FC: " + e);
+    } finally {
+      recoveringGraveKeys.delete(graveKey);
     }
   });
 }
@@ -672,7 +686,26 @@ function getPlayerSettings(_player) {
     graveOthers: isSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS)
   };
 }
+function isPlayerAdmin(player) {
+  try {
+    if (typeof player.isOp === "function" && player.isOp()) {
+      return true;
+    }
+  } catch {
+  }
+  if (player.hasTag("admin") || player.hasTag("op")) {
+    return true;
+  }
+  if (world2.getAllPlayers().length <= 1) {
+    return true;
+  }
+  return false;
+}
 function showSettingsForm(player) {
+  if (!isPlayerAdmin(player)) {
+    player.sendMessage("\xA7c[\u8A2D\u5B9A] \u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A\u3092\u5909\u66F4\u3059\u308B\u6A29\u9650\uFF08OP\u6A29\u9650\u307E\u305F\u306Fadmin\u30BF\u30B0\uFF09\u304C\u3042\u308A\u307E\u305B\u3093\u3002");
+    return;
+  }
   const current = getPlayerSettings(player);
   const currentCompassMode = getRecoveryCompassMode();
   const form = new ModalFormData();
@@ -964,6 +997,9 @@ function handleSettingsItemUse(event, cancelCallback) {
   const item = event.itemStack;
   if (!item) return;
   if (item.typeId === "minecraft:wooden_sword") {
+    if (!isPlayerAdmin(player)) {
+      return;
+    }
     cancelCallback();
     system2.run(() => {
       showSettingsForm(player);
@@ -1119,16 +1155,32 @@ function destroyBlock(dimension, position, player) {
       player.runCommand(
         `loot spawn ${position.x} ${position.y} ${position.z} mine ${position.x} ${position.y} ${position.z} mainhand`
       );
-      dimension.runCommand(
-        `setblock ${position.x} ${position.y} ${position.z} air`
-      );
+      const block = dimension.getBlock(position);
+      if (block) {
+        block.setType("minecraft:air");
+      }
     } else {
-      dimension.runCommand(
-        `setblock ${position.x} ${position.y} ${position.z} air destroy`
-      );
+      const block = dimension.getBlock(position);
+      if (block) {
+        block.setType("minecraft:air");
+      }
     }
   } catch (e) {
   }
+}
+function batchProcessBlocks(dimension, positions, processFn, player, batchSize = 20) {
+  if (positions.length === 0) return;
+  let index = 0;
+  function processNextBatch() {
+    const end = Math.min(index + batchSize, positions.length);
+    for (; index < end; index++) {
+      processFn(dimension, positions[index], player);
+    }
+    if (index < positions.length) {
+      system3.run(processNextBatch);
+    }
+  }
+  processNextBatch();
 }
 function oreMassDestruction(event, breakableBlockIdSet) {
   const player = event.player;
@@ -1150,19 +1202,25 @@ function oreMassDestruction(event, breakableBlockIdSet) {
     },
     { maxCount: 100 }
   );
-  for (const position of destroyPositions) {
-    destroyBlock(event.dimension, position, player);
-  }
+  if (destroyPositions.length === 0) return;
   if (player.getGameMode() !== GameMode.Creative) {
+    const damageToAdd = calculateDurabilityDamage(
+      enchant.unbreaking,
+      destroyPositions.length
+    );
     durability.damage = Math.min(
       durability.maxDurability,
-      calculateDurabilityDamage(
-        enchant.unbreaking,
-        durability.damage + destroyPositions.length
-      )
+      durability.damage + damageToAdd
     );
     equippable.setEquipment(EquipmentSlot3.Mainhand, mainhandItem);
   }
+  batchProcessBlocks(
+    event.dimension,
+    destroyPositions,
+    destroyBlock,
+    player,
+    20
+  );
 }
 function treeMassDestruction(event) {
   const player = event.player;
@@ -1225,31 +1283,40 @@ function treeMassDestruction(event) {
     }
   );
   if (!somePersistent) return;
-  const destroyPositions = [
-    ...treeDestroyPositions,
-    ...leafDestroyPositions.filter(
-      (pos) => !connectedOtherTreeAround.has(vector3ToString(pos))
-    )
-  ];
-  for (const position of destroyPositions) {
-    destroyBlock(event.dimension, position, player);
-  }
   if (player.getGameMode() !== GameMode.Creative) {
+    const damageToAdd = calculateDurabilityDamage(
+      enchant.unbreaking,
+      treeDestroyPositions.length
+    );
     durability.damage = Math.min(
       durability.maxDurability,
-      calculateDurabilityDamage(
-        enchant.unbreaking,
-        durability.damage + treeDestroyPositions.length
-      )
+      durability.damage + damageToAdd
     );
     equippable.setEquipment(EquipmentSlot3.Mainhand, mainhandItem);
   }
+  batchProcessBlocks(
+    event.dimension,
+    treeDestroyPositions,
+    destroyBlock,
+    player,
+    20
+  );
+  const validLeafPositions = leafDestroyPositions.filter(
+    (pos) => !connectedOtherTreeAround.has(vector3ToString(pos))
+  );
+  batchProcessBlocks(
+    event.dimension,
+    validLeafPositions,
+    destroyBlock,
+    player,
+    20
+  );
 }
 
 // src/offhand-touch.ts
 import {
   world as world3,
-  system as system3,
+  system as system4,
   EquipmentSlot as EquipmentSlot4,
   Player as Player5,
   BlockPermutation,
@@ -1281,12 +1348,36 @@ function getOffhandTorchLightLevel(player) {
   if (level === void 0) return null;
   return { typeId: offhandItem.typeId, level };
 }
-function removeLight(dimension, position) {
+function getLightPosKey(dimensionId, pos) {
+  return `${dimensionId}@${pos.x},${pos.y},${pos.z}`;
+}
+var addonPlacedLights = /* @__PURE__ */ new Set();
+function isLightNeededByOtherPlayers(excludingPlayerId, dimensionId, position) {
+  for (const [pId, lightData] of activeLights.entries()) {
+    if (pId === excludingPlayerId) continue;
+    if (lightData.dimensionId !== dimensionId) continue;
+    for (const loc of lightData.locations) {
+      if (Vector3Utils.equals(loc, position)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function removeLight(dimension, position, playerId) {
+  const key = getLightPosKey(dimension.id, position);
+  if (!addonPlacedLights.has(key)) {
+    return;
+  }
+  if (playerId && isLightNeededByOtherPlayers(playerId, dimension.id, position)) {
+    return;
+  }
   try {
     const block = dimension.getBlock(position);
     if (block && isLightBlock(block.typeId)) {
       block.setType("minecraft:air");
     }
+    addonPlacedLights.delete(key);
   } catch (e) {
   }
 }
@@ -1294,10 +1385,15 @@ function placeLight(dimension, position, level) {
   try {
     const block = dimension.getBlock(position);
     if (!block || !isAirOrLightBlock(block.typeId)) return false;
+    const key = getLightPosKey(dimension.id, position);
+    if (isLightBlock(block.typeId) && !addonPlacedLights.has(key)) {
+      return false;
+    }
     const lightPermutation = BlockPermutation.resolve("minecraft:light_block", {
       block_light_level: level
     });
     block.setPermutation(lightPermutation);
+    addonPlacedLights.add(key);
     return true;
   } catch (e) {
     return false;
@@ -1309,7 +1405,7 @@ function clearPreviousLight(playerId) {
   try {
     const dimension = world3.getDimension(previous.dimensionId);
     for (const position of previous.locations) {
-      removeLight(dimension, position);
+      removeLight(dimension, position, playerId);
     }
   } catch (e) {
   }
@@ -1358,7 +1454,7 @@ function getLookAtBlock(player, maxDistance = 10) {
     return dimension.getBlock(targetLocation);
   }
 }
-system3.runInterval(() => {
+system4.runInterval(() => {
   for (const player of world3.getAllPlayers()) {
     const playerId = player.id;
     if (!player.isValid || !playerId) {
@@ -1414,7 +1510,7 @@ system3.runInterval(() => {
         (newPos) => Vector3Utils.equals(newPos, prevPos)
       );
       if (!isStillNeeded) {
-        removeLight(dimension, prevPos);
+        removeLight(dimension, prevPos, playerId);
       }
     }
     const finalizedLocations = [];
@@ -1458,7 +1554,7 @@ function handleTorchSwap(player, cancelCallback) {
   const offhandItem = equippable.getEquipment(EquipmentSlot4.Offhand);
   if (mainhandItem && mainhandItem.typeId in TORCH_LIGHT_LEVELS && !offhandItem) {
     cancelCallback();
-    system3.run(() => {
+    system4.run(() => {
       player.runCommand(
         `replaceitem entity @s slot.weapon.offhand 0 ${mainhandItem.typeId} ${mainhandItem.amount}`
       );
@@ -1468,7 +1564,7 @@ function handleTorchSwap(player, cancelCallback) {
   }
   if (!mainhandItem && offhandItem && offhandItem.typeId in TORCH_LIGHT_LEVELS) {
     cancelCallback();
-    system3.run(() => {
+    system4.run(() => {
       player.runCommand(
         `replaceitem entity @s slot.weapon.mainhand 0 ${offhandItem.typeId} ${offhandItem.amount}`
       );
@@ -1481,7 +1577,7 @@ function handleTorchSwap(player, cancelCallback) {
 // src/waypoint/waypoints.ts
 import {
   world as world8,
-  system as system5,
+  system as system6,
   EquipmentSlot as EquipmentSlot6,
   Player as Player8
 } from "@minecraft/server";
@@ -1494,7 +1590,8 @@ import {
 
 // src/waypoint/store-waypoint.ts
 import { world as world4 } from "@minecraft/server";
-var STORAGE_KEY = "waypoints";
+var WP_PREFIX = "wp:";
+var LEGACY_STORAGE_KEY = "waypoints";
 var waypoints = /* @__PURE__ */ new Map();
 var waypointCache = [];
 function updateCache() {
@@ -1526,36 +1623,50 @@ function isWaypoint(value) {
   const pos = candidate.pos;
   return typeof candidate.dim === "string" && typeof candidate.color === "string" && (candidate.name === null || typeof candidate.name === "string") && (candidate.creatorId === void 0 || typeof candidate.creatorId === "string") && (candidate.createdAt === void 0 || typeof candidate.createdAt === "string") && (candidate.source === void 0 || typeof candidate.source === "string") && typeof pos === "object" && pos !== null && typeof pos.x === "number" && typeof pos.y === "number" && typeof pos.z === "number";
 }
-function saveToStorage() {
-  try {
-    const plainObj = Object.fromEntries(waypoints);
-    world4.setDynamicProperty(STORAGE_KEY, JSON.stringify(plainObj));
-  } catch (e) {
-    console.error(`[Waypoints] \u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F:`, e);
-  }
-}
 function loadWaypoints() {
   waypoints.clear();
   try {
-    const rawData = world4.getDynamicProperty(STORAGE_KEY);
-    if (typeof rawData !== "string") {
-      updateCache();
-      return;
+    const legacyRaw = world4.getDynamicProperty(LEGACY_STORAGE_KEY);
+    if (typeof legacyRaw === "string") {
+      const parsed = JSON.parse(legacyRaw);
+      if (typeof parsed === "object" && parsed !== null) {
+        for (const [key, value] of Object.entries(parsed)) {
+          if (isWaypoint(value)) {
+            waypoints.set(key, value);
+            try {
+              world4.setDynamicProperty(`${WP_PREFIX}${key}`, JSON.stringify(value));
+            } catch {
+            }
+          }
+        }
+      }
+      world4.setDynamicProperty(LEGACY_STORAGE_KEY, void 0);
+      console.warn(`[Waypoints] \u65E7\u5F62\u5F0F\u30C7\u30FC\u30BF\u304B\u3089 ${waypoints.size} \u4EF6\u3092\u500B\u5225\u30AD\u30FC\u3078\u6B63\u5E38\u79FB\u884C\u3057\u307E\u3057\u305F\u3002`);
     }
-    const parsed = JSON.parse(rawData);
-    if (typeof parsed !== "object" || parsed === null) {
-      updateCache();
-      return;
-    }
-    for (const [key, value] of Object.entries(parsed)) {
-      if (isWaypoint(value)) {
-        waypoints.set(key, value);
+  } catch (e) {
+    console.warn(`[Waypoints] \u30EC\u30AC\u30B7\u30FC\u30C7\u30FC\u30BF\u79FB\u884C\u51E6\u7406\u30A8\u30E9\u30FC:`, e);
+  }
+  try {
+    const allPropIds = world4.getDynamicPropertyIds();
+    for (const propId of allPropIds) {
+      if (propId.startsWith(WP_PREFIX)) {
+        const raw = world4.getDynamicProperty(propId);
+        if (typeof raw === "string") {
+          try {
+            const parsed = JSON.parse(raw);
+            if (isWaypoint(parsed)) {
+              const wpKey = propId.substring(WP_PREFIX.length);
+              waypoints.set(wpKey, parsed);
+            }
+          } catch {
+          }
+        }
       }
     }
     updateCache();
     console.warn(`[Waypoints] \u30ED\u30FC\u30C9\u5B8C\u4E86: ${waypoints.size} \u4EF6\u306E\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u3092\u5FA9\u5143\u3057\u307E\u3057\u305F\u3002`);
   } catch (e) {
-    console.warn(`[Waypoints] \u30D1\u30FC\u30B9\u307E\u305F\u306F\u30ED\u30FC\u30C9\u306B\u5931\u6557\u3057\u307E\u3057\u305F:`, e);
+    console.warn(`[Waypoints] \u500B\u5225\u30D7\u30ED\u30D1\u30C6\u30A3\u306E\u30ED\u30FC\u30C9\u306B\u5931\u6557\u3057\u307E\u3057\u305F:`, e);
     updateCache();
   }
 }
@@ -1577,7 +1688,11 @@ function addWaypoint(dimension, location, color, name, creatorId, createdAt, sou
   };
   waypoints.set(id, newWaypoint);
   updateCache();
-  saveToStorage();
+  try {
+    world4.setDynamicProperty(`${WP_PREFIX}${id}`, JSON.stringify(newWaypoint));
+  } catch (e) {
+    console.error(`[Waypoints] \u500B\u5225\u30D7\u30ED\u30D1\u30C6\u30A3\u4FDD\u5B58\u30A8\u30E9\u30FC [${id}]:`, e);
+  }
   return newWaypoint;
 }
 function deleteWaypoint(dimension, location) {
@@ -1586,7 +1701,11 @@ function deleteWaypoint(dimension, location) {
   const existed = waypoints.delete(id);
   updateCache();
   if (existed) {
-    saveToStorage();
+    try {
+      world4.setDynamicProperty(`${WP_PREFIX}${id}`, void 0);
+    } catch (e) {
+      console.error(`[Waypoints] \u500B\u5225\u30D7\u30ED\u30D1\u30C6\u30A3\u524A\u9664\u30A8\u30E9\u30FC [${id}]:`, e);
+    }
   }
   return existed;
 }
@@ -1700,7 +1819,7 @@ function getWaypointDisplayName(wp) {
 import {
   world as world6,
   Player as Player6,
-  system as system4,
+  system as system5,
   EquipmentSlot as EquipmentSlot5
 } from "@minecraft/server";
 
@@ -1970,7 +2089,7 @@ function getPlayerVirtualNav(player) {
 function getOrCreatePlayerVirtualNav(player) {
   let state = playerVirtualNavMap.get(player.id);
   if (!state) {
-    const currentTick = system4.currentTick;
+    const currentTick = system5.currentTick;
     state = {
       targetOffset: { x: 0, y: 0, z: 0 },
       startOffset: { x: 0, y: 0, z: 0 },
@@ -2082,7 +2201,7 @@ function getFocusedWaypoint(player) {
 function getCurrentVirtualOffset(player) {
   const state = playerVirtualNavMap.get(player.id);
   if (!state) return { x: 0, y: 0, z: 0 };
-  const currentTick = system4.currentTick;
+  const currentTick = system5.currentTick;
   const elapsed = currentTick - state.animStartTick;
   if (elapsed >= state.animDurationTicks) {
     return { ...state.targetOffset };
@@ -2287,7 +2406,7 @@ function formatWaypointHUDText(player, waypoint, actionTag = "", isZoomed) {
 }
 function showWaypointOperationNotice(player, waypoint, actionTag, durationTicks = 15) {
   const state = getOrCreatePlayerVirtualNav(player);
-  const currentTick = system4.currentTick;
+  const currentTick = system5.currentTick;
   const text = formatWaypointHUDText(player, waypoint, actionTag);
   state.noticeText = text;
   state.noticeUntilTick = currentTick + durationTicks;
@@ -2340,7 +2459,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
   if (!itemStack || itemStack.typeId !== "minecraft:compass" && itemStack.typeId !== "minecraft:recovery_compass") {
     return;
   }
-  const currentTick = system4.currentTick;
+  const currentTick = system5.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
   if (currentTick - state.lastUseTick < 5) {
     cancelCallback?.();
@@ -2370,7 +2489,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
       setWaypointHiddenForPlayer(player, key, false);
       state.pinnedWaypointKey = key;
       showWaypointOperationNotice(player, targetWp, "\xA76[\u56FA\u5B9A]");
-      system4.run(() => {
+      system5.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
@@ -2381,7 +2500,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
     } else if (state.pinnedWaypointKey === key) {
       state.pinnedWaypointKey = null;
       showWaypointOperationNotice(player, targetWp, "\xA77[\u56FA\u5B9A\u89E3\u9664]");
-      system4.run(() => {
+      system5.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.break", { pitch: 1, volume: 0.8 });
@@ -2392,7 +2511,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
     } else {
       state.pinnedWaypointKey = key;
       showWaypointOperationNotice(player, targetWp, "\xA76[\u56FA\u5B9A]");
-      system4.run(() => {
+      system5.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
@@ -2424,7 +2543,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
           closestHit.waypoint,
           "\xA77[\u56FA\u5B9A\u89E3\u9664]"
         );
-        system4.run(() => {
+        system5.run(() => {
           try {
             if (player && player.isValid) {
               player.playSound("random.break", { pitch: 1, volume: 0.8 });
@@ -2435,7 +2554,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
       } else {
         state.pinnedWaypointKey = key;
         showWaypointOperationNotice(player, closestHit.waypoint, "\xA76[\u56FA\u5B9A]");
-        system4.run(() => {
+        system5.run(() => {
           try {
             if (player && player.isValid) {
               player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
@@ -2514,7 +2633,7 @@ function handleCompassLeftClick(player, itemStack) {
     if (!isRecoveryCompass) {
       return;
     }
-    const currentTick2 = system4.currentTick;
+    const currentTick2 = system5.currentTick;
     const state2 = getOrCreatePlayerVirtualNav(player);
     if (currentTick2 - state2.lastLeftClickTick < 5) {
       return;
@@ -2530,7 +2649,7 @@ function handleCompassLeftClick(player, itemStack) {
       player.onScreenDisplay.setActionBar(modeText);
     } catch {
     }
-    system4.run(() => {
+    system5.run(() => {
       try {
         if (player && player.isValid) {
           if (isDeathOnly) {
@@ -2544,7 +2663,7 @@ function handleCompassLeftClick(player, itemStack) {
     });
     return;
   }
-  const currentTick = system4.currentTick;
+  const currentTick = system5.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
   if (currentTick - state.lastLeftClickTick < 2) {
     return;
@@ -2572,7 +2691,7 @@ function handleCompassLeftClick(player, itemStack) {
       }
       if (isNowHidden) {
         showWaypointOperationNotice(player, closeTargetWp, "\xA77[\u975E\u8868\u793A]");
-        system4.run(() => {
+        system5.run(() => {
           try {
             if (player && player.isValid) {
               player.playSound("random.break", { pitch: 1, volume: 0.8 });
@@ -2582,7 +2701,7 @@ function handleCompassLeftClick(player, itemStack) {
         });
       } else {
         showWaypointOperationNotice(player, closeTargetWp, "\xA7a[\u8868\u793A]");
-        system4.run(() => {
+        system5.run(() => {
           try {
             if (player && player.isValid) {
               player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
@@ -2622,7 +2741,7 @@ function handleCompassLeftClick(player, itemStack) {
         player.sendMessage(`\xA7c[Waypoint] ${displayName} \u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
       } catch {
       }
-      system4.run(() => {
+      system5.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.break", { pitch: 1.2, volume: 1 });
@@ -2636,7 +2755,7 @@ function handleCompassLeftClick(player, itemStack) {
         state.pinnedWaypointKey = null;
       }
       showWaypointOperationNotice(player, targetWp, "\xA7c[\u975E\u8868\u793A \u25A0\u25A0]");
-      system4.run(() => {
+      system5.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.break", { pitch: 1, volume: 0.8 });
@@ -2650,7 +2769,7 @@ function handleCompassLeftClick(player, itemStack) {
     state.remoteHideClickTick = currentTick;
     const noticeTag = targetWp.source === "death" ? "\xA7c[\u524A\u9664 \u25A0\u25A1]" : "\xA7c[\u975E\u8868\u793A \u25A0\u25A1]";
     showWaypointOperationNotice(player, targetWp, noticeTag);
-    system4.run(() => {
+    system5.run(() => {
       try {
         if (player && player.isValid) {
           player.playSound("random.orb", { pitch: 1.2, volume: 0.8 });
@@ -2662,7 +2781,7 @@ function handleCompassLeftClick(player, itemStack) {
 }
 function updatePlayerVirtualNavHUD(player) {
   checkAndAutoDeleteDeathWaypoint(player);
-  const currentTick = system4.currentTick;
+  const currentTick = system5.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
   const isHolding = isPlayerHoldingCompass(player);
   if (state.wasHoldingCompass && !isHolding) {
@@ -2782,7 +2901,7 @@ function hasSilkTouchEnchantment(itemStack) {
 function handleSilkTouchWaypointDelete(player, itemStack, cancelCallback) {
   if (!(player instanceof Player6) || !player.isValid) return false;
   if (!hasSilkTouchEnchantment(itemStack)) return false;
-  const currentTick = system4.currentTick;
+  const currentTick = system5.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
   if (currentTick - state.lastSilkTouchDeleteTick < 10) {
     cancelCallback?.();
@@ -2818,7 +2937,7 @@ function handleSilkTouchWaypointDelete(player, itemStack, cancelCallback) {
     }
   } catch {
   }
-  system4.run(() => {
+  system5.run(() => {
     try {
       if (player && player.isValid) {
         player.playSound("random.break", { pitch: 1.2, volume: 1 });
@@ -2993,19 +3112,19 @@ var lastPlacedBannerName = /* @__PURE__ */ new Map();
 var playerBannerColorCache = /* @__PURE__ */ new Map();
 function initWaypoints() {
   loadWaypoints();
-  system5.runTimeout(() => {
+  system6.runTimeout(() => {
     try {
       syncWaypointMarkers();
     } catch {
     }
   }, 40);
-  system5.runInterval(() => {
+  system6.runInterval(() => {
     try {
       syncWaypointMarkers();
     } catch {
     }
   }, 100);
-  system5.runInterval(() => {
+  system6.runInterval(() => {
     for (let player of world8.getAllPlayers()) {
       if (!player || !player.isValid) continue;
       const equippable = player.getComponent("minecraft:equippable");
@@ -3143,7 +3262,7 @@ function initWaypoints() {
       }
       const dim = player.dimension;
       const soundPos = { ...waypointPos };
-      system5.run(() => {
+      system6.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.orb", { pitch: 1.2, volume: 1 });
@@ -3194,13 +3313,13 @@ function initWaypoints() {
     } catch {
     }
   });
-  system5.runInterval(() => {
+  system6.runInterval(() => {
     try {
       correctWaypointMarkerPositions();
     } catch {
     }
   }, 2);
-  system5.runInterval(() => {
+  system6.runInterval(() => {
     try {
       const players = world8.getAllPlayers();
       if (players.length === 0 || waypointCache.length === 0) return;
@@ -3264,11 +3383,33 @@ function initWaypoints() {
         }
         player.setDynamicProperty("death_waypoint_count", deathCount);
       } catch {
-        const existingDeathWps = waypointCache.filter(
-          (wp) => wp.source === "death" && wp.creatorId === player.id
-        );
-        deathCount = existingDeathWps.length + 1;
       }
+      const existingDeathWps = waypointCache.filter(
+        (wp) => wp.source === "death" && wp.creatorId === player.id
+      );
+      const MAX_DEATH_WAYPOINTS = 20;
+      if (existingDeathWps.length >= MAX_DEATH_WAYPOINTS) {
+        existingDeathWps.sort((a, b) => {
+          const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return tA - tB;
+        });
+        const toRemoveCount = existingDeathWps.length - MAX_DEATH_WAYPOINTS + 1;
+        for (let i = 0; i < toRemoveCount; i++) {
+          const oldWp = existingDeathWps[i];
+          try {
+            const oldDimId = oldWp.dim.includes(":") ? oldWp.dim : `minecraft:${oldWp.dim}`;
+            const oldDim = world8.getDimension(oldDimId);
+            if (oldDim) {
+              deleteWaypoint(oldDim, oldWp.pos);
+              const oldKey = getWaypointKey(oldWp);
+              removeWaypointMarker(oldDim, oldKey, oldWp.pos);
+            }
+          } catch {
+          }
+        }
+      }
+      deathCount = existingDeathWps.length + 1;
       const waypointName = `\u6B7B\u4EA1\u5730\u70B9${deathCount}`;
       addWaypoint(
         dim,
@@ -3292,7 +3433,7 @@ function initWaypoints() {
       );
     }
   });
-  system5.runInterval(() => {
+  system6.runInterval(() => {
     for (let player of world8.getAllPlayers()) {
       try {
         if (!player || !player.isValid) continue;
@@ -3331,7 +3472,7 @@ world9.afterEvents.itemUse.subscribe((event) => {
 });
 
 // src/index.ts
-system6.run(() => {
+system7.run(() => {
   try {
     world10.gameRules.keepInventory = true;
   } catch {
@@ -3362,7 +3503,7 @@ world10.afterEvents.entityDie.subscribe((event) => {
 world10.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
 });
-system6.afterEvents.scriptEventReceive.subscribe((event) => {
+system7.afterEvents.scriptEventReceive.subscribe((event) => {
   try {
     handleSettingsScriptEvent(event);
   } catch (error) {
@@ -3374,7 +3515,7 @@ world10.afterEvents.playerSpawn.subscribe((event) => {
   if (!player) return;
   handleGravePlayerSpawn(player);
   if (event.initialSpawn) {
-    system6.run(() => {
+    system7.run(() => {
       try {
         player.sendMessage(
           `\xA76[Mining & Utility Addon] \xA7a\u30ED\u30FC\u30C9\u5B8C\u4E86

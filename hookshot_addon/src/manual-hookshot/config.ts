@@ -83,8 +83,8 @@ export const MANUAL_HOOKSHOT_CONFIG = {
    */
   ROPE_PARTICLE: "minecraft:basic_crit_particle",
 
-  /** ロープパーティクルの描画間隔（ブロック。マルチプレイのパケット帯域を考慮し1.2ブロック間隔で軽量化） */
-  ROPE_STEP_DISTANCE: 1.2,
+  /** ロープパーティクルの描画間隔（ブロック。マルチプレイのパケット帯域を考慮し2.5ブロック間隔で大幅軽量化） */
+  ROPE_STEP_DISTANCE: 2.5,
 
   /** フック着弾後、アイテム使用による手動解除を受け付けない最小待機tick（マルチプレイのパケットジッター・長押しによる誤解除暴発を防止） */
   RELEASE_DEBOUNCE_TICKS: 5,

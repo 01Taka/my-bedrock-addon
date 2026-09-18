@@ -12,6 +12,7 @@ import {
   Player,
   PlayerBreakBlockAfterEvent,
   Vector3,
+  system,
 } from "@minecraft/server";
 import { getMainHandItemInfo } from "./utils";
 import { isSettingEnabled, SETTING_KEYS } from "./settings";
@@ -221,7 +222,7 @@ function calculateDurabilityDamage(unbreakingLevel: number, baseDamage = 1) {
 }
 
 /**
- * ブロックの破壊とツールのエンチャント（幸運/シルクタッチ等）を反映したドロップ処理
+ * ブロックの破壊とツールのエンチャントを反映したドロップ処理（鉱石・原木・葉っぱ共通）
  */
 function destroyBlock(
   dimension: Dimension,
@@ -230,21 +231,46 @@ function destroyBlock(
 ) {
   try {
     if (player && player.isValid) {
-      // 1. プレイヤーの手持ちツール（メインハンド）のエンチャントを反映してドロップ生成
+      // 1. プレイヤーの手持ちツールのエンチャントを反映してドロップ生成（苗木、リンゴ、棒等もドロップ）
       player.runCommand(
         `loot spawn ${position.x} ${position.y} ${position.z} mine ${position.x} ${position.y} ${position.z} mainhand`,
       );
-      // 2. ブロックを消去
-      dimension.runCommand(
-        `setblock ${position.x} ${position.y} ${position.z} air`,
-      );
+      // 2. ブロックを直接空気にして消去
+      const block = dimension.getBlock(position);
+      if (block) {
+        block.setType("minecraft:air");
+      }
     } else {
-      // プレイヤーが無効な場合のフォールバック（通常破壊）
-      dimension.runCommand(
-        `setblock ${position.x} ${position.y} ${position.z} air destroy`,
-      );
+      const block = dimension.getBlock(position);
+      if (block) {
+        block.setType("minecraft:air");
+      }
     }
   } catch (e) {}
+}
+
+/**
+ * 複数ブロックを1tickあたり batchSize 個ずつ小分けに破壊してサーバーのスパイクフリーズを防止
+ */
+function batchProcessBlocks(
+  dimension: Dimension,
+  positions: Vector3[],
+  processFn: (dimension: Dimension, position: Vector3, player?: Player) => void,
+  player?: Player,
+  batchSize = 20,
+) {
+  if (positions.length === 0) return;
+  let index = 0;
+  function processNextBatch() {
+    const end = Math.min(index + batchSize, positions.length);
+    for (; index < end; index++) {
+      processFn(dimension, positions[index], player);
+    }
+    if (index < positions.length) {
+      system.run(processNextBatch);
+    }
+  }
+  processNextBatch();
 }
 
 export function oreMassDestruction(
@@ -277,20 +303,29 @@ export function oreMassDestruction(
     { maxCount: 100 },
   );
 
-  for (const position of destroyPositions) {
-    destroyBlock(event.dimension, position, player);
-  }
+  if (destroyPositions.length === 0) return;
 
+  // 1. ツールの耐久度消費（今回破壊したブロック数のみを対象に計算し、現在ダメージに加算）
   if (player.getGameMode() !== GameMode.Creative) {
+    const damageToAdd = calculateDurabilityDamage(
+      enchant.unbreaking,
+      destroyPositions.length,
+    );
     durability.damage = Math.min(
       durability.maxDurability,
-      calculateDurabilityDamage(
-        enchant.unbreaking,
-        durability.damage + destroyPositions.length,
-      ),
+      durability.damage + damageToAdd,
     );
     equippable.setEquipment(EquipmentSlot.Mainhand, mainhandItem);
   }
+
+  // 2. 鉱石をバッチ分散処理で破壊（1tickに20個ずつ処理してフリーズ防止）
+  batchProcessBlocks(
+    event.dimension,
+    destroyPositions,
+    destroyBlock,
+    player,
+    20,
+  );
 }
 
 export function treeMassDestruction(event: PlayerBreakBlockAfterEvent) {
@@ -379,24 +414,37 @@ export function treeMassDestruction(event: PlayerBreakBlockAfterEvent) {
   // 3. 破壊処理
   if (!somePersistent) return;
 
-  const destroyPositions = [
-    ...treeDestroyPositions,
-    ...leafDestroyPositions.filter(
-      (pos) => !connectedOtherTreeAround.has(vector3ToString(pos)),
-    ),
-  ];
-  for (const position of destroyPositions) {
-    destroyBlock(event.dimension, position, player);
-  }
-
+  // 1. ツールの耐久度消費（原木破壊数のみを対象に計算し、現在ダメージに加算）
   if (player.getGameMode() !== GameMode.Creative) {
+    const damageToAdd = calculateDurabilityDamage(
+      enchant.unbreaking,
+      treeDestroyPositions.length,
+    );
     durability.damage = Math.min(
       durability.maxDurability,
-      calculateDurabilityDamage(
-        enchant.unbreaking,
-        durability.damage + treeDestroyPositions.length,
-      ),
+      durability.damage + damageToAdd,
     );
     equippable.setEquipment(EquipmentSlot.Mainhand, mainhandItem);
   }
+
+  // 2. 原木ブロックの破壊（バッチ分散処理で20個ずつ実行）
+  batchProcessBlocks(
+    event.dimension,
+    treeDestroyPositions,
+    destroyBlock,
+    player,
+    20,
+  );
+
+  // 3. 葉っぱブロックの破壊（コマンドでアイテムをドロップさせつつ、20個ずつバッチ処理してフリーズ防止）
+  const validLeafPositions = leafDestroyPositions.filter(
+    (pos) => !connectedOtherTreeAround.has(vector3ToString(pos)),
+  );
+  batchProcessBlocks(
+    event.dimension,
+    validLeafPositions,
+    destroyBlock,
+    player,
+    20,
+  );
 }

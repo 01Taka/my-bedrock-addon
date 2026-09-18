@@ -433,12 +433,38 @@ export function initWaypoints() {
           deathCount = Math.floor(rawCount) + 1;
         }
         player.setDynamicProperty("death_waypoint_count", deathCount);
-      } catch {
-        const existingDeathWps = waypointCache.filter(
-          (wp) => wp.source === "death" && wp.creatorId === player.id,
-        );
-        deathCount = existingDeathWps.length + 1;
+      } catch {}
+
+      const existingDeathWps = waypointCache.filter(
+        (wp) => wp.source === "death" && wp.creatorId === player.id,
+      );
+
+      // 上限管理: プレイヤーごとの死亡ウェイポイントを最新20件に制限し、古いものを自動削除
+      const MAX_DEATH_WAYPOINTS = 20;
+      if (existingDeathWps.length >= MAX_DEATH_WAYPOINTS) {
+        // createdAt 昇順（古い順）でソート
+        existingDeathWps.sort((a, b) => {
+          const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return tA - tB;
+        });
+
+        const toRemoveCount = existingDeathWps.length - MAX_DEATH_WAYPOINTS + 1;
+        for (let i = 0; i < toRemoveCount; i++) {
+          const oldWp = existingDeathWps[i];
+          try {
+            const oldDimId = oldWp.dim.includes(":") ? oldWp.dim : `minecraft:${oldWp.dim}`;
+            const oldDim = world.getDimension(oldDimId);
+            if (oldDim) {
+              deleteWaypoint(oldDim, oldWp.pos);
+              const oldKey = getWaypointKey(oldWp);
+              removeWaypointMarker(oldDim, oldKey, oldWp.pos);
+            }
+          } catch {}
+        }
       }
+
+      deathCount = existingDeathWps.length + 1;
 
       const waypointName = `死亡地点${deathCount}`;
 
