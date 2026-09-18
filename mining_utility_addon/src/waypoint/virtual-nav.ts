@@ -322,16 +322,38 @@ export function getCurrentVirtualOffset(player: Player): Vector3 {
 }
 
 /**
+ * プレイヤーの実際の一人称カメラ位置（目線の正確なワールド座標）を取得する。
+ * Bedrock の getHeadLocation() はモデルの頭部ピボット（足元+約1.42m）を返すため、
+ * 視点カメラの高さ（通常時: 足元+1.62m, スニーク時: 足元+1.27m）に正確に補正する。
+ */
+export function getPlayerCameraLocation(player: Player): Vector3 {
+  const headLoc = player.getHeadLocation();
+  const eyeHeight = player.isSneaking ? 1.27 : 1.62;
+  return {
+    x: headLoc.x,
+    y: player.location.y + eyeHeight,
+    z: headLoc.z,
+  };
+}
+
+/**
  * プレイヤーの仮想視点（実際の頭の位置 + 補間オフセット）を計算
  */
 export function getVirtualHeadLocation(player: Player): Vector3 {
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const offset = getCurrentVirtualOffset(player);
   return {
-    x: headLoc.x + offset.x,
-    y: headLoc.y + offset.y,
-    z: headLoc.z + offset.z,
+    x: camLoc.x + offset.x,
+    y: camLoc.y + offset.y,
+    z: camLoc.z + offset.z,
   };
+}
+
+/**
+ * プレイヤーの仮想カメラ位置（実際のカメラ位置 + 補間オフセット）を計算
+ */
+export function getVirtualCameraLocation(player: Player): Vector3 {
+  return getVirtualHeadLocation(player);
 }
 
 /**
@@ -452,7 +474,7 @@ export function checkAndAutoDeleteDeathWaypoint(player: Player): boolean {
   if (!player || !player.isValid) return false;
 
   const currentDim = player.dimension.id.replace(/^minecraft:/, "");
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = normalize(player.getViewDirection());
   const COS_30_DEG = Math.cos((30 * Math.PI) / 180); // 約 0.866 (既存ロジックと同一)
 
@@ -464,9 +486,9 @@ export function checkAndAutoDeleteDeathWaypoint(player: Player): boolean {
     const wpDim = wp.dim.replace(/^minecraft:/, "");
     if (wpDim !== currentDim) continue;
 
-    const dx = wp.pos.x - headLoc.x;
-    const dy = wp.pos.y - headLoc.y;
-    const dz = wp.pos.z - headLoc.z;
+    const dx = wp.pos.x - camLoc.x;
+    const dy = wp.pos.y - camLoc.y;
+    const dz = wp.pos.z - camLoc.z;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
     if (dist <= WAYPOINT_PROXIMITY_RANGE && dist > 0.01) {
@@ -741,13 +763,13 @@ export function handleCompassVirtualNav(
   state.lastUseTick = currentTick;
   cancelCallback?.();
 
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = normalize(player.getViewDirection());
   const currentOffset = getCurrentVirtualOffset(player);
   const virtHead: Vector3 = {
-    x: headLoc.x + currentOffset.x,
-    y: headLoc.y + currentOffset.y,
-    z: headLoc.z + currentOffset.z,
+    x: camLoc.x + currentOffset.x,
+    y: camLoc.y + currentOffset.y,
+    z: camLoc.z + currentOffset.z,
   };
 
   // ----------------------------------------------------
@@ -755,7 +777,7 @@ export function handleCompassVirtualNav(
   // 右クリックで対象ウェイポイントの固定状態をトグル（シフト不要）
   // ※非表示になっている場合は、表示状態に切り替えて固定状態にする
   // ----------------------------------------------------
-  const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+  const nearbyTarget = getNearbyToggleableWaypoint(player, camLoc, viewDir);
   if (nearbyTarget) {
     cancelCallback?.();
 
@@ -866,9 +888,9 @@ export function handleCompassVirtualNav(
   // ----------------------------------------------------
   const baseOffset = { ...state.targetOffset };
   const origin: Vector3 = {
-    x: headLoc.x + baseOffset.x,
-    y: headLoc.y + baseOffset.y,
-    z: headLoc.z + baseOffset.z,
+    x: camLoc.x + baseOffset.x,
+    y: camLoc.y + baseOffset.y,
+    z: camLoc.z + baseOffset.z,
   };
 
   // 処理の最初に必ず50m進んでから判定
@@ -1014,13 +1036,13 @@ export function handleCompassLeftClick(
   }
   state.lastLeftClickTick = currentTick;
 
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = normalize(player.getViewDirection());
   const currentOffset = getCurrentVirtualOffset(player);
   const virtHead: Vector3 = {
-    x: headLoc.x + currentOffset.x,
-    y: headLoc.y + currentOffset.y,
-    z: headLoc.z + currentOffset.z,
+    x: camLoc.x + currentOffset.x,
+    y: camLoc.y + currentOffset.y,
+    z: camLoc.z + currentOffset.z,
   };
 
   const isZoomed =
@@ -1035,7 +1057,7 @@ export function handleCompassLeftClick(
   // 1. 近接（WAYPOINT_PROXIMITY_RANGE以内、非ズーム時）: 1クリックで表示/非表示のトグル
   // ----------------------------------------------------
   if (!isZoomed) {
-    const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+    const nearbyTarget = getNearbyToggleableWaypoint(player, camLoc, viewDir);
     if (nearbyTarget) {
       // 近接トグル時は遠隔ダブルクリック状態をリセット
       state.remoteHideTargetKey = null;
@@ -1200,13 +1222,13 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
   // ----------------------------------------------------
   // 対象ウェイポイントの決定
   // ----------------------------------------------------
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = normalize(player.getViewDirection());
   const currentOffset = getCurrentVirtualOffset(player);
   const virtHead: Vector3 = {
-    x: headLoc.x + currentOffset.x,
-    y: headLoc.y + currentOffset.y,
-    z: headLoc.z + currentOffset.z,
+    x: camLoc.x + currentOffset.x,
+    y: camLoc.y + currentOffset.y,
+    z: camLoc.z + currentOffset.z,
   };
 
   let activeWaypoint: Waypoint | null = null;
@@ -1243,7 +1265,7 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
   if (isHolding) {
     // 1. 付近（WAYPOINT_PROXIMITY_RANGE内）でウェイポイントの方向を向いている場合:
     // シフトの有無にかかわらず、操作（トグル）対象となる最寄りウェイポイントを最優先でHUD表示
-    const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+    const nearbyTarget = getNearbyToggleableWaypoint(player, camLoc, viewDir);
     if (nearbyTarget) {
       activeWaypoint = nearbyTarget.waypoint;
       isPinnedActive =

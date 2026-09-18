@@ -21,6 +21,7 @@ import {
   isWaypointHiddenForPlayer,
   getNearbyToggleableWaypoint,
   isWaypointVisibleToPlayer,
+  getPlayerCameraLocation,
 } from "./virtual-nav";
 
 /**
@@ -224,12 +225,12 @@ export function displayHUDWaypoints(player: Player) {
   // コンパスを持っていないプレイヤーにはHUDマーカーを非表示にする
   if (!isPlayerHoldingCompass(player)) return;
 
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = player.getViewDirection();
 
   // 【誤操作防止】近接範囲内（WAYPOINT_PROXIMITY_RANGE）でウェイポイントの方向を向いている場合、
   // コンパスによるすべての手前パーティクルを非表示にする
-  if (getNearbyToggleableWaypoint(player, headLoc, viewDir)) {
+  if (getNearbyToggleableWaypoint(player, camLoc, viewDir)) {
     return;
   }
 
@@ -256,10 +257,10 @@ export function displayHUDWaypoints(player: Player) {
   // 固定の際にコンパスを所持して、固定表示が可視かつシフトなしの場合、固定されたHUDのパーティクル以外は灰色に変える
   const isGrayMode = isPinnedVisible && !player.isSneaking;
 
-  // 仮想前進時の視点座標（前進していない場合は実際の頭座標）
-  const originX = headLoc.x + offset.x;
-  const originY = headLoc.y + offset.y;
-  const originZ = headLoc.z + offset.z;
+  // 仮想前進時の視点座標（前進していない場合は実際のカメラ座標）
+  const originX = camLoc.x + offset.x;
+  const originY = camLoc.y + offset.y;
+  const originZ = camLoc.z + offset.z;
 
   for (let waypoint of waypointCache) {
     try {
@@ -276,7 +277,7 @@ export function displayHUDWaypoints(player: Player) {
       const targetZ = waypoint.pos.z;
 
       const dx = targetX - originX;
-      const dy = targetY - (originY - 0.5);
+      const dy = targetY - originY;
       const dz = targetZ - originZ;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
@@ -286,11 +287,11 @@ export function displayHUDWaypoints(player: Player) {
       // ゼロ除算防止
       const safeDist = Math.max(0.1, dist);
 
-      // 投影位置: プレイヤーの現在位置から、仮想視点でのターゲット方向へ投影
+      // 投影位置: プレイヤーのカメラ位置から、仮想視点でのターゲット方向へ投影
       const projDist = HUD_MARKER_CONFIG.projectionDistance;
-      const projX = headLoc.x + (dx / safeDist) * projDist;
-      const projY = headLoc.y + (dy / safeDist) * projDist;
-      const projZ = headLoc.z + (dz / safeDist) * projDist;
+      const projX = camLoc.x + (dx / safeDist) * projDist;
+      const projY = camLoc.y + (dy / safeDist) * projDist;
+      const projZ = camLoc.z + (dz / safeDist) * projDist;
 
       // 相似比に基づく見かけサイズ
       const isFocused = focusedKey !== null && wpKey === focusedKey;

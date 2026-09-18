@@ -2098,14 +2098,26 @@ function getCurrentVirtualOffset(player) {
     z: state.startOffset.z + (state.targetOffset.z - state.startOffset.z) * easeOut
   };
 }
-function getVirtualHeadLocation(player) {
+function getPlayerCameraLocation(player) {
   const headLoc = player.getHeadLocation();
+  const eyeHeight = player.isSneaking ? 1.27 : 1.62;
+  return {
+    x: headLoc.x,
+    y: player.location.y + eyeHeight,
+    z: headLoc.z
+  };
+}
+function getVirtualHeadLocation(player) {
+  const camLoc = getPlayerCameraLocation(player);
   const offset = getCurrentVirtualOffset(player);
   return {
-    x: headLoc.x + offset.x,
-    y: headLoc.y + offset.y,
-    z: headLoc.z + offset.z
+    x: camLoc.x + offset.x,
+    y: camLoc.y + offset.y,
+    z: camLoc.z + offset.z
   };
+}
+function getVirtualCameraLocation(player) {
+  return getVirtualHeadLocation(player);
 }
 function findRayClosestWaypoint(origin, direction, dimensionId, player) {
   let closest = null;
@@ -2175,7 +2187,7 @@ function getNearbyToggleableWaypoint(player, headLoc, viewDir) {
 function checkAndAutoDeleteDeathWaypoint(player) {
   if (!player || !player.isValid) return false;
   const currentDim = player.dimension.id.replace(/^minecraft:/, "");
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = normalize(player.getViewDirection());
   const COS_30_DEG = Math.cos(30 * Math.PI / 180);
   for (const wp of waypointCache) {
@@ -2183,9 +2195,9 @@ function checkAndAutoDeleteDeathWaypoint(player) {
     if (wp.creatorId !== player.id) continue;
     const wpDim = wp.dim.replace(/^minecraft:/, "");
     if (wpDim !== currentDim) continue;
-    const dx = wp.pos.x - headLoc.x;
-    const dy = wp.pos.y - headLoc.y;
-    const dz = wp.pos.z - headLoc.z;
+    const dx = wp.pos.x - camLoc.x;
+    const dy = wp.pos.y - camLoc.y;
+    const dz = wp.pos.z - camLoc.z;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
     if (dist <= WAYPOINT_PROXIMITY_RANGE && dist > 0.01) {
       const dirX = dx / dist;
@@ -2336,15 +2348,15 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
   }
   state.lastUseTick = currentTick;
   cancelCallback?.();
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = normalize(player.getViewDirection());
   const currentOffset = getCurrentVirtualOffset(player);
   const virtHead = {
-    x: headLoc.x + currentOffset.x,
-    y: headLoc.y + currentOffset.y,
-    z: headLoc.z + currentOffset.z
+    x: camLoc.x + currentOffset.x,
+    y: camLoc.y + currentOffset.y,
+    z: camLoc.z + currentOffset.z
   };
-  const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+  const nearbyTarget = getNearbyToggleableWaypoint(player, camLoc, viewDir);
   if (nearbyTarget) {
     cancelCallback?.();
     if (currentTick - state.lastPinToggleTick < PIN_TOGGLE_COOLDOWN_TICKS) {
@@ -2437,9 +2449,9 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
   }
   const baseOffset = { ...state.targetOffset };
   const origin = {
-    x: headLoc.x + baseOffset.x,
-    y: headLoc.y + baseOffset.y,
-    z: headLoc.z + baseOffset.z
+    x: camLoc.x + baseOffset.x,
+    y: camLoc.y + baseOffset.y,
+    z: camLoc.z + baseOffset.z
   };
   const origin50 = {
     x: origin.x + viewDir.x * PRE_STEP_DISTANCE,
@@ -2538,17 +2550,17 @@ function handleCompassLeftClick(player, itemStack) {
     return;
   }
   state.lastLeftClickTick = currentTick;
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = normalize(player.getViewDirection());
   const currentOffset = getCurrentVirtualOffset(player);
   const virtHead = {
-    x: headLoc.x + currentOffset.x,
-    y: headLoc.y + currentOffset.y,
-    z: headLoc.z + currentOffset.z
+    x: camLoc.x + currentOffset.x,
+    y: camLoc.y + currentOffset.y,
+    z: camLoc.z + currentOffset.z
   };
   const isZoomed = Math.abs(currentOffset.x) > 0.01 || Math.abs(currentOffset.y) > 0.01 || Math.abs(currentOffset.z) > 0.01 || Math.abs(state.targetOffset.x) > 0.01 || Math.abs(state.targetOffset.y) > 0.01 || Math.abs(state.targetOffset.z) > 0.01;
   if (!isZoomed) {
-    const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+    const nearbyTarget = getNearbyToggleableWaypoint(player, camLoc, viewDir);
     if (nearbyTarget) {
       state.remoteHideTargetKey = null;
       state.remoteHideClickTick = 0;
@@ -2664,13 +2676,13 @@ function updatePlayerVirtualNavHUD(player) {
     }
   }
   state.wasHoldingCompass = isHolding;
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = normalize(player.getViewDirection());
   const currentOffset = getCurrentVirtualOffset(player);
   const virtHead = {
-    x: headLoc.x + currentOffset.x,
-    y: headLoc.y + currentOffset.y,
-    z: headLoc.z + currentOffset.z
+    x: camLoc.x + currentOffset.x,
+    y: camLoc.y + currentOffset.y,
+    z: camLoc.z + currentOffset.z
   };
   let activeWaypoint = null;
   let isPinnedActive = false;
@@ -2695,7 +2707,7 @@ function updatePlayerVirtualNavHUD(player) {
     }
   }
   if (isHolding) {
-    const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+    const nearbyTarget = getNearbyToggleableWaypoint(player, camLoc, viewDir);
     if (nearbyTarget) {
       activeWaypoint = nearbyTarget.waypoint;
       isPinnedActive = pinnedWp !== null && getWaypointKey2(activeWaypoint) === state.pinnedWaypointKey;
@@ -2911,9 +2923,9 @@ var HUD_MARKER_CONFIG = {
 function displayHUDWaypoints(player) {
   if (!player || !player.isValid) return;
   if (!isPlayerHoldingCompass(player)) return;
-  const headLoc = player.getHeadLocation();
+  const camLoc = getPlayerCameraLocation(player);
   const viewDir = player.getViewDirection();
-  if (getNearbyToggleableWaypoint(player, headLoc, viewDir)) {
+  if (getNearbyToggleableWaypoint(player, camLoc, viewDir)) {
     return;
   }
   const dimension = player.dimension;
@@ -2932,9 +2944,9 @@ function displayHUDWaypoints(player) {
     }
   }
   const isGrayMode = isPinnedVisible && !player.isSneaking;
-  const originX = headLoc.x + offset.x;
-  const originY = headLoc.y + offset.y;
-  const originZ = headLoc.z + offset.z;
+  const originX = camLoc.x + offset.x;
+  const originY = camLoc.y + offset.y;
+  const originZ = camLoc.z + offset.z;
   for (let waypoint of waypointCache) {
     try {
       const waypointDimension = waypoint.dim.includes(":") ? waypoint.dim : `minecraft:${waypoint.dim}`;
@@ -2945,15 +2957,15 @@ function displayHUDWaypoints(player) {
       const targetY = waypoint.pos.y;
       const targetZ = waypoint.pos.z;
       const dx = targetX - originX;
-      const dy = targetY - (originY - 0.5);
+      const dy = targetY - originY;
       const dz = targetZ - originZ;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (!isVirtual && dist < WAYPOINT_PROXIMITY_RANGE) continue;
       const safeDist = Math.max(0.1, dist);
       const projDist = HUD_MARKER_CONFIG.projectionDistance;
-      const projX = headLoc.x + dx / safeDist * projDist;
-      const projY = headLoc.y + dy / safeDist * projDist;
-      const projZ = headLoc.z + dz / safeDist * projDist;
+      const projX = camLoc.x + dx / safeDist * projDist;
+      const projY = camLoc.y + dy / safeDist * projDist;
+      const projZ = camLoc.z + dz / safeDist * projDist;
       const isFocused = focusedKey !== null && wpKey === focusedKey;
       const sizeMultiplier = isFocused ? HUD_MARKER_CONFIG.focusZoom : 1;
       const apparentSize = HUD_MARKER_CONFIG.baseSize * (projDist / safeDist);
@@ -3396,8 +3408,10 @@ export {
   getNearbyToggleableWaypoint,
   getOrCreatePlayerVirtualNav,
   getPinnedWaypointKey,
+  getPlayerCameraLocation,
   getPlayerVirtualNav,
   getRelative8DirectionArrow,
+  getVirtualCameraLocation,
   getVirtualHeadLocation,
   getWaypointKey2 as getWaypointKey,
   getWaypointMarkerNameTag,
