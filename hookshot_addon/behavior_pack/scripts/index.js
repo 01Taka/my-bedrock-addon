@@ -18,6 +18,10 @@ var MANUAL_HOOKSHOT_CONFIG = {
   AUTO_PARACHUTE_ITEM_ID: "addon:auto_hookshot_parachute",
   /** パラシュート付きフックショットの巻き取り中に付与する低速落下の持続tick数（50tick=2.5秒） */
   SLOW_FALLING_TICKS_ON_PARACHUTE_WIND: 50,
+  /** パラシュート付きフックショットで自分より下方に巻き取る際のy軸目標降下速度（ブロック/tick、常に一定速度を維持） */
+  PARACHUTE_DOWNWARD_TARGET_SPEED: -0.3,
+  /** パラシュート付きフックショットで下方に巻き取る際のy軸加速度（ブロック/tick^2、目標速度に達するまで一定の加速度を付与） */
+  PARACHUTE_DOWNWARD_ACCELERATION: 0.02,
   /** 最大射程距離（ブロック） */
   MAX_DISTANCE: 120,
   /** シフト巻取り時の1フレーム（tick）あたりインパルス強度 */
@@ -548,10 +552,24 @@ function updateManualHookshots() {
           const ratio = 1 - speedAlongTarget / maxSpeed;
           effectiveImpulse = MANUAL_HOOKSHOT_CONFIG.PULL_IMPULSE * ratio;
         }
-        if (effectiveImpulse > 0) {
+        const isParachuteDownwind = hook.hasParachute && dy < 0;
+        if (effectiveImpulse > 0 || isParachuteDownwind) {
+          let impulseY = ny * effectiveImpulse + MANUAL_HOOKSHOT_CONFIG.PULL_VERTICAL_BOOST;
+          if (isParachuteDownwind) {
+            const targetVelY = MANUAL_HOOKSHOT_CONFIG.PARACHUTE_DOWNWARD_TARGET_SPEED;
+            const diffY = targetVelY - vel.y;
+            const maxAccel = MANUAL_HOOKSHOT_CONFIG.PARACHUTE_DOWNWARD_ACCELERATION;
+            if (diffY > 0) {
+              impulseY = Math.min(diffY, maxAccel);
+            } else if (diffY < 0) {
+              impulseY = Math.max(diffY, -maxAccel);
+            } else {
+              impulseY = 0;
+            }
+          }
           const impulse = {
             x: nx * effectiveImpulse,
-            y: ny * effectiveImpulse + MANUAL_HOOKSHOT_CONFIG.PULL_VERTICAL_BOOST,
+            y: impulseY,
             z: nz * effectiveImpulse
           };
           try {

@@ -11,6 +11,12 @@ export const MANUAL_HOOKSHOT_CONFIG = {
   /** パラシュート付きフックショットの巻き取り中に付与する低速落下の持続tick数（50tick=2.5秒） */
   SLOW_FALLING_TICKS_ON_PARACHUTE_WIND: 50,
 
+  /** パラシュート付きフックショットで自分より下方に巻き取る際のy軸目標降下速度（ブロック/tick、常に一定速度を維持） */
+  PARACHUTE_DOWNWARD_TARGET_SPEED: -0.3,
+
+  /** パラシュート付きフックショットで下方に巻き取る際のy軸加速度（ブロック/tick^2、目標速度に達するまで一定の加速度を付与） */
+  PARACHUTE_DOWNWARD_ACCELERATION: 0.02,
+
   /** 最大射程距離（ブロック） */
   MAX_DISTANCE: 120,
 

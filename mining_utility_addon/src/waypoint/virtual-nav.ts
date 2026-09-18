@@ -410,6 +410,14 @@ export function getNearbyToggleableWaypoint(
       ) {
         continue;
       }
+    } else {
+      // 死亡地点のみ表示モード中の場合、通常ウェイポイントは操作対象外
+      if (
+        isPlayerHoldingRecoveryCompass(player) &&
+        playerVirtualNavMap.get(player.id)?.recoveryCompassDeathOnly
+      ) {
+        continue;
+      }
     }
 
     const dx = wp.pos.x - headLoc.x;

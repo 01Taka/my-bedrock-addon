@@ -637,12 +637,35 @@ export function updateManualHookshots(): void {
         // 3. 既に目標に向かって上限速度以上で移動している場合:
         //    これ以上加速させず、上限速度を維持します (effectiveImpulse = 0)
 
-        if (effectiveImpulse > 0) {
+        const isParachuteDownwind = hook.hasParachute && dy < 0;
+
+        if (effectiveImpulse > 0 || isParachuteDownwind) {
+          // 通常のy軸インパルス
+          let impulseY =
+            ny * effectiveImpulse +
+            MANUAL_HOOKSHOT_CONFIG.PULL_VERTICAL_BOOST;
+
+          // パラシュート付きフックショットで巻き取り先が自分より下（dy < 0）の場合:
+          // 最初は一定の加速度をかけて変化させ、目標速度に達するまでは加速度的に速度を変化、到達後は目標速度を維持
+          if (isParachuteDownwind) {
+            const targetVelY =
+              MANUAL_HOOKSHOT_CONFIG.PARACHUTE_DOWNWARD_TARGET_SPEED;
+            const diffY = targetVelY - vel.y;
+            const maxAccel =
+              MANUAL_HOOKSHOT_CONFIG.PARACHUTE_DOWNWARD_ACCELERATION;
+
+            if (diffY > 0) {
+              impulseY = Math.min(diffY, maxAccel);
+            } else if (diffY < 0) {
+              impulseY = Math.max(diffY, -maxAccel);
+            } else {
+              impulseY = 0;
+            }
+          }
+
           const impulse = {
             x: nx * effectiveImpulse,
-            y:
-              ny * effectiveImpulse +
-              MANUAL_HOOKSHOT_CONFIG.PULL_VERTICAL_BOOST,
+            y: impulseY,
             z: nz * effectiveImpulse,
           };
 
