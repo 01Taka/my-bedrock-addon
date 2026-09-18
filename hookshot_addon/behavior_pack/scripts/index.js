@@ -1,11 +1,11 @@
 // src/index.ts
-import { system as system3 } from "@minecraft/server";
+import { system as system2 } from "@minecraft/server";
 
 // src/manual-hookshot/index.ts
 import {
-  world as world2,
-  system as system2,
-  Player as Player2,
+  world,
+  system,
+  Player,
   EquipmentSlot
 } from "@minecraft/server";
 
@@ -13,6 +13,7 @@ import {
 var MANUAL_HOOKSHOT_CONFIG = {
   /** アイテムID */
   ITEM_ID: "addon:manual_hookshot",
+  AUTO_ITEM_ID: "addon:auto_hookshot",
   /** 最大射程距離（ブロック） */
   MAX_DISTANCE: 120,
   /** シフト巻取り時の1フレーム（tick）あたりインパルス強度 */
@@ -73,200 +74,11 @@ var MANUAL_HOOKSHOT_CONFIG = {
   /** メインハンド非所持時にフックを着弾点付近で手動解除する際の視線方向内積閾値（0.70で約45度以内） */
   DETACH_VIEW_ANGLE_COS: 0.7
 };
-
-// src/settings.ts
-import {
-  world,
-  Player,
-  system
-} from "@minecraft/server";
-import { ModalFormData } from "@minecraft/server-ui";
-var SETTING_KEYS = {
-  AUTO_SNEAK: "setting_auto_sneak"
-};
-var memorySettingsFallback = /* @__PURE__ */ new Map();
-function getPlayerMemoryMap(player) {
-  const key = player.id || player.name || "default";
-  let map = memorySettingsFallback.get(key);
-  if (!map) {
-    map = /* @__PURE__ */ new Map();
-    memorySettingsFallback.set(key, map);
-  }
-  return map;
+function isHookshotItemId(typeId) {
+  return typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID || typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID;
 }
-function isSettingEnabled(player, key, defaultValue = false) {
-  try {
-    const val = player.getDynamicProperty(key);
-    if (typeof val === "boolean") {
-      return val;
-    }
-  } catch (e) {
-  }
-  const memMap = getPlayerMemoryMap(player);
-  if (memMap.has(key)) {
-    return memMap.get(key);
-  }
-  return defaultValue;
-}
-function isAutoSneakEnabled(player) {
-  return isSettingEnabled(player, SETTING_KEYS.AUTO_SNEAK, false);
-}
-function setSettingEnabled(player, key, enabled) {
-  try {
-    player.setDynamicProperty(key, enabled);
-  } catch (e) {
-    console.error(`\u8A2D\u5B9A\u4FDD\u5B58\u30A8\u30E9\u30FC [${key}]:`, e);
-  }
-  getPlayerMemoryMap(player).set(key, enabled);
-}
-function showSettingsForm(player) {
-  const currentAutoSneak = isAutoSneakEnabled(player);
-  const form = new ModalFormData();
-  form.title("\xA7l\xA76\u624B\u52D5\u5DFB\u53D6\u308A\u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8\u8A2D\u5B9A");
-  form.toggle("\u5E38\u6642\u5DFB\u53D6\u308A (Switch\u7B49\u306E\u64CD\u4F5C\u88DC\u52A9)", {
-    defaultValue: currentAutoSneak
-  });
-  form.show(player).then((response) => {
-    if (response.canceled || !response.formValues) return;
-    const [autoSneakVal] = response.formValues;
-    setSettingEnabled(player, SETTING_KEYS.AUTO_SNEAK, autoSneakVal);
-    const statusText = (val) => val ? "\xA7a[ON]\xA7r" : "\xA7c[OFF]\xA7r";
-    player.sendMessage(
-      `\xA7a============================
-\xA76\u3010\u624B\u52D5\u5DFB\u53D6\u308A\u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8\u8A2D\u5B9A\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3011
-\xA7f\u30FB\u5E38\u6642\u5DFB\u53D6\u308A: ${statusText(autoSneakVal)}
-\xA7a============================`
-    );
-  }).catch((error) => {
-    console.error("\u8A2D\u5B9AUI\u8868\u793A\u30A8\u30E9\u30FC:", error);
-  });
-}
-function handleSettingsScriptEvent(event) {
-  const rawId = (event.id || "").trim().toLowerCase();
-  const rawMsg = (event.message || "").trim().toLowerCase();
-  let cmd = "";
-  let arg = "";
-  if (rawId.startsWith("manual_hookshot:")) {
-    cmd = rawId.substring(16).trim();
-    arg = rawMsg;
-  } else if (rawId.startsWith("manualhookshot:")) {
-    cmd = rawId.substring(15).trim();
-    arg = rawMsg;
-  } else if (rawId === "manual_hookshot" || rawId === "manualhookshot") {
-    const parts = rawMsg.split(/\s+/);
-    cmd = parts[0] || "";
-    arg = parts.slice(1).join(" ").trim();
-  } else if (rawId.startsWith("hookshot:")) {
-    cmd = rawId.substring(9).trim();
-    arg = rawMsg;
-  } else if (rawId === "hookshot") {
-    const parts = rawMsg.split(/\s+/);
-    cmd = parts[0] || "";
-    arg = parts.slice(1).join(" ").trim();
-  } else if (rawId.startsWith("addon:")) {
-    cmd = rawId.substring(6).trim();
-    arg = rawMsg;
-  } else if (rawId === "addon") {
-    const parts = rawMsg.split(/\s+/);
-    cmd = parts[0] || "";
-    arg = parts.slice(1).join(" ").trim();
-  } else {
-    cmd = rawId;
-    arg = rawMsg;
-  }
-  const validCmds = ["menu", "setting", "settings", "config", "ui", "autosneak", "auto_sneak", "sneak", "status", "help"];
-  if (!validCmds.includes(cmd)) {
-    return;
-  }
-  const allOnlinePlayers = world.getAllPlayers();
-  let targets = [];
-  if (event.sourceEntity && (event.sourceEntity instanceof Player || event.sourceEntity.typeId === "minecraft:player")) {
-    targets = [event.sourceEntity];
-  } else if (arg) {
-    const targetName = arg.split(/\s+/)[0];
-    const found = allOnlinePlayers.find(
-      (p) => p.name.toLowerCase() === targetName.toLowerCase()
-    );
-    if (found) {
-      targets = [found];
-      arg = arg.substring(targetName.length).trim();
-    }
-  }
-  if (targets.length === 0) {
-    targets = allOnlinePlayers;
-  }
-  if (targets.length === 0) {
-    return;
-  }
-  const primaryPlayer = targets[0];
-  const isServerSource = !(event.sourceEntity instanceof Player);
-  switch (cmd) {
-    case "menu":
-    case "setting":
-    case "settings":
-    case "config":
-    case "ui": {
-      system.run(() => {
-        showSettingsForm(primaryPlayer);
-      });
-      break;
-    }
-    case "autosneak":
-    case "auto_sneak":
-    case "sneak": {
-      let next;
-      if (arg === "on" || arg === "true" || arg === "1") next = true;
-      else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isAutoSneakEnabled(primaryPlayer);
-      for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.AUTO_SNEAK, next);
-        try {
-          p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
-        } catch {
-        }
-        p.sendMessage(
-          `\xA76[\u624B\u52D5\u5DFB\u53D6\u308A\u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8\u8A2D\u5B9A] \u5E38\u6642\u5DFB\u53D6\u308A \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
-      }
-      if (isServerSource) {
-        world.sendMessage(
-          `\xA76[\u624B\u52D5\u5DFB\u53D6\u308A\u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8\u8A2D\u5B9A] \u5E38\u6642\u5DFB\u53D6\u308A \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
-      }
-      break;
-    }
-    case "status": {
-      const autoSneak = isAutoSneakEnabled(primaryPlayer);
-      const statusText = (val) => val ? "\xA7a[ON]\xA7r" : "\xA7c[OFF]\xA7r";
-      const statusMsg = `\xA7a============================
-\xA76\u3010\u624B\u52D5\u5DFB\u53D6\u308A\u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8\u8A2D\u5B9A\u3011
-\xA7f\u30FB\u5E38\u6642\u5DFB\u53D6\u308A: ${statusText(autoSneak)}
-\xA77(/scriptevent manual_hookshot:menu \u3067\u8A2D\u5B9A\u753B\u9762\u3092\u958B\u304F)
-\xA7a============================`;
-      for (const p of targets) {
-        p.sendMessage(statusMsg);
-      }
-      if (isServerSource) {
-        world.sendMessage(statusMsg);
-      }
-      break;
-    }
-    case "help": {
-      const helpMsg = `\xA7a============================
-\xA76\u3010\u624B\u52D5\u5DFB\u53D6\u308A\u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8 \u30B3\u30DE\u30F3\u30C9\u4E00\u89A7\u3011
-\xA7f\u30FB/scriptevent manual_hookshot:menu : \u8A2D\u5B9A\u753B\u9762\u3092\u958B\u304F
-\u30FB/scriptevent manual_hookshot:autosneak : \u5E38\u6642\u5DFB\u53D6\u308A\u306EON/OFF\u5207\u308A\u66FF\u3048
-\u30FB/scriptevent manual_hookshot:status : \u73FE\u5728\u306E\u8A2D\u5B9A\u72B6\u614B\u3092\u78BA\u8A8D
-\xA7a============================`;
-      for (const p of targets) {
-        p.sendMessage(helpMsg);
-      }
-      if (isServerSource) {
-        world.sendMessage(helpMsg);
-      }
-      break;
-    }
-  }
+function isAutoHookshotItemId(typeId) {
+  return typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID;
 }
 
 // src/manual-hookshot/entities.ts
@@ -310,9 +122,6 @@ function isValidHookshotTarget(player, entity) {
 
 // src/manual-hookshot/index.ts
 function isSneakButtonPressed(player) {
-  if (isAutoSneakEnabled(player)) {
-    return true;
-  }
   try {
     const input = player.inputInfo;
     if (input && typeof input.getButtonState === "function") {
@@ -334,9 +143,9 @@ function isHoldingManualHookshot(player) {
     const equippable = player.getComponent("minecraft:equippable");
     if (equippable) {
       const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
-      if (mainhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
+      if (isHookshotItemId(mainhand?.typeId)) return true;
       const offhand = equippable.getEquipment(EquipmentSlot.Offhand);
-      if (offhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
+      if (isHookshotItemId(offhand?.typeId)) return true;
     }
   } catch {
   }
@@ -347,7 +156,7 @@ function isHoldingManualHookshotInMainhand(player) {
     const equippable = player.getComponent("minecraft:equippable");
     if (equippable) {
       const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
-      if (mainhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
+      if (isHookshotItemId(mainhand?.typeId)) return true;
     }
   } catch {
   }
@@ -379,7 +188,7 @@ function updateManualHookshotHud(player) {
     let canHitTarget = false;
     if (!hook) {
       const cached = targetAimCache.get(player.id);
-      if (cached && system2.currentTick - cached.lastCheckTick < 4) {
+      if (cached && system.currentTick - cached.lastCheckTick < 4) {
         canHitTarget = cached.canHit;
       } else {
         try {
@@ -404,7 +213,7 @@ function updateManualHookshotHud(player) {
         }
         targetAimCache.set(player.id, {
           canHit: canHitTarget,
-          lastCheckTick: system2.currentTick
+          lastCheckTick: system.currentTick
         });
       }
     }
@@ -519,14 +328,15 @@ function tryDetachHookOnInteract(player) {
 }
 function handleManualHookshotUse(event, cancelCallback) {
   const item = event.itemStack;
-  if (!item || item.typeId !== MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return;
+  if (!item || !isHookshotItemId(item.typeId)) return;
+  const isAuto = isAutoHookshotItemId(item.typeId);
   const player = event.source;
-  if (!(player instanceof Player2)) return;
+  if (!(player instanceof Player)) return;
   cancelCallback();
-  system2.run(() => {
+  system.run(() => {
     const existingHook = playerHooks.get(player.id);
     if (existingHook) {
-      if (system2.currentTick - existingHook.attachedTick < MANUAL_HOOKSHOT_CONFIG.RELEASE_DEBOUNCE_TICKS) {
+      if (system.currentTick - existingHook.attachedTick < MANUAL_HOOKSHOT_CONFIG.RELEASE_DEBOUNCE_TICKS) {
         return;
       }
       resetHook(player, true, true);
@@ -590,7 +400,8 @@ function handleManualHookshotUse(event, cancelCallback) {
       sneakTickCounter: 0,
       hasStartedWinding: false,
       chargeTicks: 0,
-      attachedTick: system2.currentTick
+      attachedTick: system.currentTick,
+      isAuto
     });
     try {
       player.dimension.spawnParticle(MANUAL_HOOKSHOT_CONFIG.HIT_PARTICLE, hitPos);
@@ -601,7 +412,7 @@ function handleManualHookshotUse(event, cancelCallback) {
 }
 function updateManualHookshots() {
   for (const [playerId, hook] of playerHooks.entries()) {
-    const player = world2.getAllPlayers().find((p) => p.id === playerId);
+    const player = world.getAllPlayers().find((p) => p.id === playerId);
     if (!player || !player.isValid) {
       playerHooks.delete(playerId);
       continue;
@@ -653,7 +464,8 @@ function updateManualHookshots() {
         }
       }
     }
-    if (isSneakButtonPressed(player)) {
+    const shouldWind = hook.isAuto || isSneakButtonPressed(player);
+    if (shouldWind) {
       let vel = { x: 0, y: 0, z: 0 };
       try {
         vel = player.getVelocity();
@@ -666,8 +478,8 @@ function updateManualHookshots() {
           try {
             player.applyImpulse({ x: 0, y: -vel.y, z: 0 });
             const lastEffectTick = lastWindStartEffectTickMap.get(player.id) ?? -9999;
-            if (system2.currentTick - lastEffectTick >= MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_INTERVAL_TICKS) {
-              lastWindStartEffectTickMap.set(player.id, system2.currentTick);
+            if (system.currentTick - lastEffectTick >= MANUAL_HOOKSHOT_CONFIG.RESET_EXPLOSION_INTERVAL_TICKS) {
+              lastWindStartEffectTickMap.set(player.id, system.currentTick);
               const feetPos = {
                 x: player.location.x,
                 y: player.location.y + 0.2,
@@ -736,35 +548,35 @@ function updateManualHookshots() {
   }
 }
 function initManualHookshot() {
-  world2.beforeEvents.itemUse.subscribe((event) => {
+  world.beforeEvents.itemUse.subscribe((event) => {
     handleManualHookshotUse(event, () => {
       event.cancel = true;
     });
-    if (event.source instanceof Player2) {
+    if (event.source instanceof Player) {
       if (tryDetachHookOnInteract(event.source)) {
         event.cancel = true;
       }
     }
   });
-  world2.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+  world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
     if (tryDetachHookOnInteract(event.player)) {
       event.cancel = true;
     }
   });
-  world2.beforeEvents.playerInteractWithEntity.subscribe((event) => {
+  world.beforeEvents.playerInteractWithEntity.subscribe((event) => {
     if (tryDetachHookOnInteract(event.player)) {
       event.cancel = true;
     }
   });
-  system2.runInterval(() => {
+  system.runInterval(() => {
     updateManualHookshots();
-    for (const player of world2.getAllPlayers()) {
+    for (const player of world.getAllPlayers()) {
       updateManualHookshotHud(player);
     }
   }, 1);
-  world2.afterEvents.entityDie.subscribe((event) => {
+  world.afterEvents.entityDie.subscribe((event) => {
     const dead = event.deadEntity;
-    if (dead instanceof Player2) {
+    if (dead instanceof Player) {
       if (playerHooks.has(dead.id)) {
         resetHook(dead, false, false);
       }
@@ -773,7 +585,7 @@ function initManualHookshot() {
       targetAimCache.delete(dead.id);
     }
   });
-  world2.afterEvents.playerDimensionChange.subscribe((event) => {
+  world.afterEvents.playerDimensionChange.subscribe((event) => {
     const player = event.player;
     if (player && player.isValid) {
       if (playerHooks.has(player.id)) {
@@ -784,7 +596,7 @@ function initManualHookshot() {
       targetAimCache.delete(player.id);
     }
   });
-  world2.afterEvents.playerSpawn.subscribe((event) => {
+  world.afterEvents.playerSpawn.subscribe((event) => {
     const player = event.player;
     if (player && player.isValid) {
       if (playerHooks.has(player.id)) {
@@ -795,7 +607,7 @@ function initManualHookshot() {
       targetAimCache.delete(player.id);
     }
   });
-  world2.beforeEvents.playerLeave.subscribe((event) => {
+  world.beforeEvents.playerLeave.subscribe((event) => {
     const player = event.player;
     if (player) {
       playerHooks.delete(player.id);
@@ -807,14 +619,7 @@ function initManualHookshot() {
 }
 
 // src/index.ts
-system3.run(() => {
-  console.warn("\xA7a[Manual Hookshot Addon] \u624B\u52D5\u5DFB\u53D6\u308A\u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8\u30A2\u30C9\u30AA\u30F3\u304C\u6B63\u5E38\u306B\u30ED\u30FC\u30C9\u3055\u308C\u307E\u3057\u305F\u3002");
+system2.run(() => {
+  console.warn("\xA7a[Hookshot Addon] \u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8\u30A2\u30C9\u30AA\u30F3\u304C\u6B63\u5E38\u306B\u30ED\u30FC\u30C9\u3055\u308C\u307E\u3057\u305F\u3002");
 });
 initManualHookshot();
-system3.afterEvents.scriptEventReceive.subscribe((event) => {
-  try {
-    handleSettingsScriptEvent(event);
-  } catch (error) {
-    console.error("\u30DE\u30CB\u30E5\u30A2\u30EB\u30D5\u30C3\u30AF\u30B7\u30E7\u30C3\u30C8\u8A2D\u5B9A\u30A4\u30D9\u30F3\u30C8\u51E6\u7406\u30A8\u30E9\u30FC:", error);
-  }
-});

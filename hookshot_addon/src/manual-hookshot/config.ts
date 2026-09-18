@@ -4,6 +4,7 @@
 export const MANUAL_HOOKSHOT_CONFIG = {
   /** アイテムID */
   ITEM_ID: "addon:manual_hookshot",
+  AUTO_ITEM_ID: "addon:auto_hookshot",
 
   /** 最大射程距離（ブロック） */
   MAX_DISTANCE: 120,
@@ -91,3 +92,20 @@ export const MANUAL_HOOKSHOT_CONFIG = {
   /** メインハンド非所持時にフックを着弾点付近で手動解除する際の視線方向内積閾値（0.70で約45度以内） */
   DETACH_VIEW_ANGLE_COS: 0.7,
 };
+
+/**
+ * 指定された typeId がフックショット（手動または自動）であるか判定
+ */
+export function isHookshotItemId(typeId: string | undefined): boolean {
+  return (
+    typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID ||
+    typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID
+  );
+}
+
+/**
+ * 指定された typeId が自動巻き取りフックショットであるか判定
+ */
+export function isAutoHookshotItemId(typeId: string | undefined): boolean {
+  return typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID;
+}

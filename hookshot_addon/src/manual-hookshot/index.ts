@@ -7,20 +7,19 @@ import {
   EquipmentSlot,
   Entity,
 } from "@minecraft/server";
-import { MANUAL_HOOKSHOT_CONFIG } from "./config";
-import { isAutoSneakEnabled } from "../settings";
+import {
+  MANUAL_HOOKSHOT_CONFIG,
+  isHookshotItemId,
+  isAutoHookshotItemId,
+} from "./config";
 import { isHeavyEntity, isValidHookshotTarget } from "./entities";
 
 /**
  * プレイヤーが物理的にスニーク（シフト）キーを押下しているかを判定
- * （低所・匍匐時の強制スニークによる誤動作を防止、Switch向け常時シフト設定対応）
+ * （低所・匍匐時の強制スニークによる誤動作を防止）
  * 古いAPIバージョン環境でも安全に動作するようオプショナルチェイニングで判定
  */
 function isSneakButtonPressed(player: Player): boolean {
-  // 常時シフト判定設定がONの場合は常にtrue
-  if (isAutoSneakEnabled(player)) {
-    return true;
-  }
   try {
     const input = (player as any).inputInfo;
     if (input && typeof input.getButtonState === "function") {
@@ -47,6 +46,8 @@ interface PlayerHookState {
   chargeTicks: number;
   /** 着弾時のゲームtick（マルチプレイでの即時解除暴発防止用） */
   attachedTick: number;
+  /** 自動巻き取りフックショットかどうか */
+  isAuto: boolean;
 }
 
 /** プレイヤーIDをキーにしたフック状態マップ */
@@ -62,30 +63,30 @@ const playersWithPillHud = new Set<string>();
 const targetAimCache = new Map<string, { canHit: boolean; lastCheckTick: number }>();
 
 /**
- * プレイヤーがマニュアルフックショットを所持（メインハンドまたはオフハンド）しているか判定
+ * プレイヤーがフックショット（手動または自動）を所持（メインハンドまたはオフハンド）しているか判定
  */
 export function isHoldingManualHookshot(player: Player): boolean {
   try {
     const equippable = player.getComponent("minecraft:equippable");
     if (equippable) {
       const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
-      if (mainhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
+      if (isHookshotItemId(mainhand?.typeId)) return true;
       const offhand = equippable.getEquipment(EquipmentSlot.Offhand);
-      if (offhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
+      if (isHookshotItemId(offhand?.typeId)) return true;
     }
   } catch {}
   return false;
 }
 
 /**
- * プレイヤーがマニュアルフックショットをメインハンドに持っているか判定
+ * プレイヤーがフックショット（手動または自動）をメインハンドに持っているか判定
  */
 export function isHoldingManualHookshotInMainhand(player: Player): boolean {
   try {
     const equippable = player.getComponent("minecraft:equippable");
     if (equippable) {
       const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
-      if (mainhand?.typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return true;
+      if (isHookshotItemId(mainhand?.typeId)) return true;
     }
   } catch {}
   return false;
@@ -340,7 +341,8 @@ export function handleManualHookshotUse(
   cancelCallback: () => void,
 ): void {
   const item = event.itemStack;
-  if (!item || item.typeId !== MANUAL_HOOKSHOT_CONFIG.ITEM_ID) return;
+  if (!item || !isHookshotItemId(item.typeId)) return;
+  const isAuto = isAutoHookshotItemId(item.typeId);
 
   const player = event.source;
   if (!(player instanceof Player)) return;
@@ -435,6 +437,7 @@ export function handleManualHookshotUse(
       hasStartedWinding: false,
       chargeTicks: 0,
       attachedTick: system.currentTick,
+      isAuto,
     });
 
     try {
@@ -522,8 +525,9 @@ export function updateManualHookshots(): void {
       }
     }
 
-    // シフト（スニーク）キー入力中のみ着弾点に向かってインパルスを毎フレーム付与
-    if (isSneakButtonPressed(player)) {
+    // 自動巻取りフックショット、またはシフト（スニーク）キー入力中のみ着弾点に向かってインパルスを毎フレーム付与
+    const shouldWind = hook.isAuto || isSneakButtonPressed(player);
+    if (shouldWind) {
       // プレイヤーの現在速度を取得
       let vel = { x: 0, y: 0, z: 0 };
       try {

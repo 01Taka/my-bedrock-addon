@@ -4,6 +4,9 @@
   "texture_data": {
     "manual_hookshot": {
       "textures": "textures/items/manual_hookshot"
+    },
+    "auto_hookshot": {
+      "textures": "textures/items/auto_hookshot"
     }
   }
 }
