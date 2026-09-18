@@ -5,6 +5,11 @@ export const MANUAL_HOOKSHOT_CONFIG = {
   /** アイテムID */
   ITEM_ID: "addon:manual_hookshot",
   AUTO_ITEM_ID: "addon:auto_hookshot",
+  MANUAL_PARACHUTE_ITEM_ID: "addon:manual_hookshot_parachute",
+  AUTO_PARACHUTE_ITEM_ID: "addon:auto_hookshot_parachute",
+
+  /** パラシュート付きフックショットの巻き取り中に付与する低速落下の持続tick数（50tick=2.5秒） */
+  SLOW_FALLING_TICKS_ON_PARACHUTE_WIND: 50,
 
   /** 最大射程距離（ブロック） */
   MAX_DISTANCE: 120,
@@ -94,18 +99,33 @@ export const MANUAL_HOOKSHOT_CONFIG = {
 };
 
 /**
- * 指定された typeId がフックショット（手動または自動）であるか判定
+ * 指定された typeId がフックショット（通常・パラシュート付き・手動・自動）であるか判定
  */
 export function isHookshotItemId(typeId: string | undefined): boolean {
   return (
     typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID ||
-    typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID
+    typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID ||
+    typeId === MANUAL_HOOKSHOT_CONFIG.MANUAL_PARACHUTE_ITEM_ID ||
+    typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_PARACHUTE_ITEM_ID
   );
 }
 
 /**
- * 指定された typeId が自動巻き取りフックショットであるか判定
+ * 指定された typeId が自動巻き取りフックショット（通常またはパラシュート付き）であるか判定
  */
 export function isAutoHookshotItemId(typeId: string | undefined): boolean {
-  return typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID;
+  return (
+    typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID ||
+    typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_PARACHUTE_ITEM_ID
+  );
+}
+
+/**
+ * 指定された typeId がパラシュート付きフックショットであるか判定
+ */
+export function isParachuteHookshotItemId(typeId: string | undefined): boolean {
+  return (
+    typeId === MANUAL_HOOKSHOT_CONFIG.MANUAL_PARACHUTE_ITEM_ID ||
+    typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_PARACHUTE_ITEM_ID
+  );
 }

@@ -14,6 +14,10 @@ var MANUAL_HOOKSHOT_CONFIG = {
   /** アイテムID */
   ITEM_ID: "addon:manual_hookshot",
   AUTO_ITEM_ID: "addon:auto_hookshot",
+  MANUAL_PARACHUTE_ITEM_ID: "addon:manual_hookshot_parachute",
+  AUTO_PARACHUTE_ITEM_ID: "addon:auto_hookshot_parachute",
+  /** パラシュート付きフックショットの巻き取り中に付与する低速落下の持続tick数（50tick=2.5秒） */
+  SLOW_FALLING_TICKS_ON_PARACHUTE_WIND: 50,
   /** 最大射程距離（ブロック） */
   MAX_DISTANCE: 120,
   /** シフト巻取り時の1フレーム（tick）あたりインパルス強度 */
@@ -75,10 +79,13 @@ var MANUAL_HOOKSHOT_CONFIG = {
   DETACH_VIEW_ANGLE_COS: 0.7
 };
 function isHookshotItemId(typeId) {
-  return typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID || typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID;
+  return typeId === MANUAL_HOOKSHOT_CONFIG.ITEM_ID || typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID || typeId === MANUAL_HOOKSHOT_CONFIG.MANUAL_PARACHUTE_ITEM_ID || typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_PARACHUTE_ITEM_ID;
 }
 function isAutoHookshotItemId(typeId) {
-  return typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID;
+  return typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_ITEM_ID || typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_PARACHUTE_ITEM_ID;
+}
+function isParachuteHookshotItemId(typeId) {
+  return typeId === MANUAL_HOOKSHOT_CONFIG.MANUAL_PARACHUTE_ITEM_ID || typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_PARACHUTE_ITEM_ID;
 }
 
 // src/manual-hookshot/entities.ts
@@ -330,6 +337,7 @@ function handleManualHookshotUse(event, cancelCallback) {
   const item = event.itemStack;
   if (!item || !isHookshotItemId(item.typeId)) return;
   const isAuto = isAutoHookshotItemId(item.typeId);
+  const hasParachute = isParachuteHookshotItemId(item.typeId);
   const player = event.source;
   if (!(player instanceof Player)) return;
   cancelCallback();
@@ -401,7 +409,8 @@ function handleManualHookshotUse(event, cancelCallback) {
       hasStartedWinding: false,
       chargeTicks: 0,
       attachedTick: system.currentTick,
-      isAuto
+      isAuto,
+      hasParachute
     });
     try {
       player.dimension.spawnParticle(MANUAL_HOOKSHOT_CONFIG.HIT_PARTICLE, hitPos);
@@ -466,6 +475,18 @@ function updateManualHookshots() {
     }
     const shouldWind = hook.isAuto || isSneakButtonPressed(player);
     if (shouldWind) {
+      if (hook.hasParachute) {
+        try {
+          player.addEffect(
+            "slow_falling",
+            MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_PARACHUTE_WIND,
+            {
+              showParticles: false
+            }
+          );
+        } catch {
+        }
+      }
       let vel = { x: 0, y: 0, z: 0 };
       try {
         vel = player.getVelocity();

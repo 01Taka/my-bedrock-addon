@@ -7,6 +7,12 @@
     },
     "auto_hookshot": {
       "textures": "textures/items/auto_hookshot"
+    },
+    "manual_hookshot_parachute": {
+      "textures": "textures/items/manual_hookshot_parachute"
+    },
+    "auto_hookshot_parachute": {
+      "textures": "textures/items/auto_hookshot_parachute"
     }
   }
 }

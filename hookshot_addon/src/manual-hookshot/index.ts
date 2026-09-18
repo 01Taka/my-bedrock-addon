@@ -11,6 +11,7 @@ import {
   MANUAL_HOOKSHOT_CONFIG,
   isHookshotItemId,
   isAutoHookshotItemId,
+  isParachuteHookshotItemId,
 } from "./config";
 import { isHeavyEntity, isValidHookshotTarget } from "./entities";
 
@@ -48,6 +49,8 @@ interface PlayerHookState {
   attachedTick: number;
   /** 自動巻き取りフックショットかどうか */
   isAuto: boolean;
+  /** パラシュート付きフックショットかどうか */
+  hasParachute: boolean;
 }
 
 /** プレイヤーIDをキーにしたフック状態マップ */
@@ -343,6 +346,7 @@ export function handleManualHookshotUse(
   const item = event.itemStack;
   if (!item || !isHookshotItemId(item.typeId)) return;
   const isAuto = isAutoHookshotItemId(item.typeId);
+  const hasParachute = isParachuteHookshotItemId(item.typeId);
 
   const player = event.source;
   if (!(player instanceof Player)) return;
@@ -438,6 +442,7 @@ export function handleManualHookshotUse(
       chargeTicks: 0,
       attachedTick: system.currentTick,
       isAuto,
+      hasParachute,
     });
 
     try {
@@ -528,6 +533,19 @@ export function updateManualHookshots(): void {
     // 自動巻取りフックショット、またはシフト（スニーク）キー入力中のみ着弾点に向かってインパルスを毎フレーム付与
     const shouldWind = hook.isAuto || isSneakButtonPressed(player);
     if (shouldWind) {
+      // パラシュート付きフックショットの場合、巻き取り中は毎フレーム低速落下エフェクトを付与（1秒持続、落下ダメージ無効化）
+      if (hook.hasParachute) {
+        try {
+          player.addEffect(
+            "slow_falling",
+            MANUAL_HOOKSHOT_CONFIG.SLOW_FALLING_TICKS_ON_PARACHUTE_WIND,
+            {
+              showParticles: false,
+            },
+          );
+        } catch {}
+      }
+
       // プレイヤーの現在速度を取得
       let vel = { x: 0, y: 0, z: 0 };
       try {
