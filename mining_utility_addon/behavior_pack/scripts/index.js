@@ -2106,6 +2106,22 @@ function isPlayerZoomed(player) {
   if (!state) return false;
   return Math.abs(state.targetOffset.x) > 0.01 || Math.abs(state.targetOffset.y) > 0.01 || Math.abs(state.targetOffset.z) > 0.01;
 }
+function formatWaypointElapsedTime(createdAt) {
+  if (!createdAt) return "0\u5206";
+  const createdMs = new Date(createdAt).getTime();
+  if (isNaN(createdMs)) return "0\u5206";
+  const diffMs = Math.max(0, Date.now() - createdMs);
+  const diffMinutes = Math.floor(diffMs / (60 * 1e3));
+  const diffHours = Math.floor(diffMs / (60 * 60 * 1e3));
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1e3));
+  if (diffMinutes < 60) {
+    return `${diffMinutes}\u5206`;
+  } else if (diffHours <= 72) {
+    return `${diffHours}\u6642\u9593`;
+  } else {
+    return `${diffDays}\u65E5`;
+  }
+}
 function formatWaypointHUDText(player, waypoint, actionTag = "", isZoomed) {
   const zoomed = isZoomed !== void 0 ? isZoomed : isPlayerZoomed(player);
   const zoomPrefix = zoomed ? "\xA77\u30BA\u30FC\u30E0\u4E2D / " : "";
@@ -2116,8 +2132,10 @@ function formatWaypointHUDText(player, waypoint, actionTag = "", isZoomed) {
   const dist = Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz));
   const displayName = getWaypointDisplayName(waypoint);
   const arrow = getRelative8DirectionArrow(player, waypoint.pos);
+  const isDeathShiftWithRecovery = waypoint.source === "death" && player.isSneaking && isPlayerHoldingRecoveryCompass(player);
+  const timePart = isDeathShiftWithRecovery ? `\xA77${formatWaypointElapsedTime(waypoint.createdAt)} ` : "";
   const tagPart = actionTag ? `${actionTag} ` : "";
-  return `${zoomPrefix}${tagPart}\xA7e${displayName} \xA7f${dist}m \xA7b${arrow}`;
+  return `${zoomPrefix}${tagPart}\xA7e${displayName} ${timePart}\xA7f${dist}m \xA7b${arrow}`;
 }
 function showWaypointOperationNotice(player, waypoint, actionTag, durationTicks = 15) {
   const state = getOrCreatePlayerVirtualNav(player);
@@ -3183,6 +3201,7 @@ export {
   correctWaypointMarkerPositions,
   displayHUDWaypoints,
   findRayClosestWaypoint,
+  formatWaypointElapsedTime,
   formatWaypointHUDText,
   getCurrentVirtualOffset,
   getFocusedWaypoint,

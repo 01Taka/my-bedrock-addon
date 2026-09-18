@@ -56,7 +56,10 @@ const playerHiddenWaypointsMap = new Map<string, Set<string>>();
 /**
  * プレイヤーごとの非表示ウェイポイント判定
  */
-export function isWaypointHiddenForPlayer(player: Player, wpKey: string): boolean {
+export function isWaypointHiddenForPlayer(
+  player: Player,
+  wpKey: string,
+): boolean {
   const hiddenSet = playerHiddenWaypointsMap.get(player.id);
   if (!hiddenSet) return false;
   return hiddenSet.has(wpKey);
@@ -65,7 +68,11 @@ export function isWaypointHiddenForPlayer(player: Player, wpKey: string): boolea
 /**
  * プレイヤーの特定ウェイポイントの非表示設定/解除
  */
-export function setWaypointHiddenForPlayer(player: Player, wpKey: string, hidden: boolean): void {
+export function setWaypointHiddenForPlayer(
+  player: Player,
+  wpKey: string,
+  hidden: boolean,
+): void {
   let hiddenSet = playerHiddenWaypointsMap.get(player.id);
   if (!hiddenSet) {
     hiddenSet = new Set<string>();
@@ -81,7 +88,10 @@ export function setWaypointHiddenForPlayer(player: Player, wpKey: string, hidden
 /**
  * プレイヤーの特定ウェイポイントの非表示状態をトグル (返り値: トグル後に非表示ならtrue, 表示ならfalse)
  */
-export function toggleWaypointHiddenForPlayer(player: Player, wpKey: string): boolean {
+export function toggleWaypointHiddenForPlayer(
+  player: Player,
+  wpKey: string,
+): boolean {
   const currentHidden = isWaypointHiddenForPlayer(player, wpKey);
   const nextHidden = !currentHidden;
   setWaypointHiddenForPlayer(player, wpKey, nextHidden);
@@ -108,7 +118,9 @@ function normalize(v: Vector3): Vector3 {
 /**
  * プレイヤーの仮想ナビゲーション状態を取得
  */
-export function getPlayerVirtualNav(player: Player): VirtualNavState | undefined {
+export function getPlayerVirtualNav(
+  player: Player,
+): VirtualNavState | undefined {
   return playerVirtualNavMap.get(player.id);
 }
 
@@ -297,9 +309,15 @@ export function getCurrentVirtualOffset(player: Player): Vector3 {
   const easeOut = 1 - Math.pow(1 - p, 3);
 
   return {
-    x: state.startOffset.x + (state.targetOffset.x - state.startOffset.x) * easeOut,
-    y: state.startOffset.y + (state.targetOffset.y - state.startOffset.y) * easeOut,
-    z: state.startOffset.z + (state.targetOffset.z - state.startOffset.z) * easeOut,
+    x:
+      state.startOffset.x +
+      (state.targetOffset.x - state.startOffset.x) * easeOut,
+    y:
+      state.startOffset.y +
+      (state.targetOffset.y - state.startOffset.y) * easeOut,
+    z:
+      state.startOffset.z +
+      (state.targetOffset.z - state.startOffset.z) * easeOut,
   };
 }
 
@@ -386,7 +404,10 @@ export function getNearbyToggleableWaypoint(
 
     // 死亡ウェイポイントの場合は本人かつリカバリーコンパス所持時のみ対象
     if (wp.source === "death") {
-      if (wp.creatorId !== player.id || !isPlayerHoldingRecoveryCompass(player)) {
+      if (
+        wp.creatorId !== player.id ||
+        !isPlayerHoldingRecoveryCompass(player)
+      ) {
         continue;
       }
     }
@@ -459,11 +480,15 @@ export function checkAndAutoDeleteDeathWaypoint(player: Player): boolean {
 
         const displayName = getWaypointDisplayName(wp);
         try {
-          player.sendMessage(`§a[Waypoint] ${displayName} に到達したため、ウェイポイントを削除しました`);
+          player.sendMessage(
+            `§a[Waypoint] ${displayName} に到達したため、ウェイポイントを削除しました`,
+          );
 
           // リカバリーコンパスがインベントリ内にある場合のみHUDとSEを実行
           if (hasRecoveryCompassInInventory(player)) {
-            player.onScreenDisplay.setActionBar(`§a[Waypoint] ${displayName} に到達したため、ウェイポイントを削除しました`);
+            player.onScreenDisplay.setActionBar(
+              `§a[Waypoint] ${displayName} に到達したため、ウェイポイントを削除しました`,
+            );
             player.playSound("random.orb", { pitch: 1.2, volume: 1.0 });
           }
         } catch {}
@@ -479,7 +504,10 @@ export function checkAndAutoDeleteDeathWaypoint(player: Player): boolean {
 /**
  * プレイヤーの現在位置・視線からターゲット位置への相対8方向矢印を取得
  */
-export function getRelative8DirectionArrow(player: Player, targetPos: Vector3): string {
+export function getRelative8DirectionArrow(
+  player: Player,
+  targetPos: Vector3,
+): string {
   const headLoc = player.getHeadLocation();
   const viewDir = player.getViewDirection();
 
@@ -492,7 +520,7 @@ export function getRelative8DirectionArrow(player: Player, targetPos: Vector3): 
   const targetYaw = Math.atan2(dx, -dz);
 
   let diffRad = targetYaw - playerYaw;
-  let diffDeg = ((diffRad * 180 / Math.PI) % 360 + 540) % 360 - 180; // -180 ~ +180
+  let diffDeg = (((((diffRad * 180) / Math.PI) % 360) + 540) % 360) - 180; // -180 ~ +180
 
   if (diffDeg >= -22.5 && diffDeg < 22.5) return "↑";
   if (diffDeg >= 22.5 && diffDeg < 67.5) return "↗";
@@ -518,8 +546,34 @@ export function isPlayerZoomed(player: Player): boolean {
 }
 
 /**
+ * ウェイポイント作成時からの経過時間をフォーマット
+ * - 60分以内 -> m分 (例: 0分, 15分, 59分)
+ * - 72時間以内 -> h時間 (例: 1時間, 24時間, 72時間)
+ * - 72時間越え -> d日 (例: 3日, 5日)
+ */
+export function formatWaypointElapsedTime(createdAt?: string): string {
+  if (!createdAt) return "0分";
+  const createdMs = new Date(createdAt).getTime();
+  if (isNaN(createdMs)) return "0分";
+
+  const diffMs = Math.max(0, Date.now() - createdMs);
+  const diffMinutes = Math.floor(diffMs / (60 * 1000));
+  const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes}分`;
+  } else if (diffHours <= 72) {
+    return `${diffHours}時間`;
+  } else {
+    return `${diffDays}日`;
+  }
+}
+
+/**
  * ウェイポイントのHUD表示文字列を統一フォーマットで生成する汎用関数
- * フォーマット: `(ズーム中 / ) [操作] ウェイポイント名 距離 矢印`
+ * フォーマット: `(ズーム中 / ) [操作] ウェイポイント名 (時間) 距離 矢印`
+ * - 死亡座標に向かってリカバリーコンパスを持ってシフトしたときのみ経過時間を追加
  *
  * @param player 対象プレイヤー
  * @param waypoint 対象ウェイポイント
@@ -544,8 +598,18 @@ export function formatWaypointHUDText(
   const displayName = getWaypointDisplayName(waypoint);
   const arrow = getRelative8DirectionArrow(player, waypoint.pos);
 
+  // 死亡座標に向かってリカバリーコンパスを持ってシフトしている場合のみ経過時間を追加
+  const isDeathShiftWithRecovery =
+    waypoint.source === "death" &&
+    player.isSneaking &&
+    isPlayerHoldingRecoveryCompass(player);
+
+  const timePart = isDeathShiftWithRecovery
+    ? `§7${formatWaypointElapsedTime(waypoint.createdAt)}前 `
+    : "";
+
   const tagPart = actionTag ? `${actionTag} ` : "";
-  return `${zoomPrefix}${tagPart}§e${displayName} §f${dist}m §b${arrow}`;
+  return `${zoomPrefix}${tagPart}§e${displayName} ${timePart}§f${dist}m §b${arrow}`;
 }
 
 /**
@@ -746,7 +810,12 @@ export function handleCompassVirtualNav(
       return;
     }
 
-    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+    const closestHit = findRayClosestWaypoint(
+      virtHead,
+      viewDir,
+      player.dimension.id,
+      player,
+    );
 
     if (closestHit) {
       state.lastPinToggleTick = currentTick; // トグル操作を実行したためクールダウンを更新
@@ -756,7 +825,11 @@ export function handleCompassVirtualNav(
       if (state.pinnedWaypointKey === key) {
         // 既に固定されているウェイポイント -> 固定解除（トグルOFF）
         state.pinnedWaypointKey = null;
-        showWaypointOperationNotice(player, closestHit.waypoint, "§7[固定解除]");
+        showWaypointOperationNotice(
+          player,
+          closestHit.waypoint,
+          "§7[固定解除]",
+        );
         system.run(() => {
           try {
             if (player && player.isValid) {
@@ -831,8 +904,8 @@ export function handleCompassVirtualNav(
   const totalDist = Math.round(
     Math.sqrt(
       state.targetOffset.x * state.targetOffset.x +
-      state.targetOffset.y * state.targetOffset.y +
-      state.targetOffset.z * state.targetOffset.z,
+        state.targetOffset.y * state.targetOffset.y +
+        state.targetOffset.z * state.targetOffset.z,
     ),
   );
   const roundedStep = Math.round(totalStep);
@@ -998,7 +1071,12 @@ export function handleCompassLeftClick(
   //    二回目: [非表示 ■■] (非表示実行)
   //    間隔: 0.75秒以内 (REMOTE_HIDE_DOUBLE_CLICK_TICKS = 15 tick)
   // ----------------------------------------------------
-  const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+  const closestHit = findRayClosestWaypoint(
+    virtHead,
+    viewDir,
+    player.dimension.id,
+    player,
+  );
   if (!closestHit) {
     // 視線先に対象ウェイポイントがない場合はダブルクリック状態をリセット
     state.remoteHideTargetKey = null;
@@ -1097,7 +1175,12 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
       Math.abs(currentOffset.y) > 0.01 ||
       Math.abs(currentOffset.z) > 0.01;
 
-    if (hasOffset || state.targetOffset.x !== 0 || state.targetOffset.y !== 0 || state.targetOffset.z !== 0) {
+    if (
+      hasOffset ||
+      state.targetOffset.x !== 0 ||
+      state.targetOffset.y !== 0 ||
+      state.targetOffset.z !== 0
+    ) {
       state.startOffset = currentOffset;
       state.targetOffset = { x: 0, y: 0, z: 0 };
       state.animStartTick = currentTick;
@@ -1131,7 +1214,10 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
       }
     }
     // もしキャッシュから消えているか、非表示に設定されていれば固定解除
-    if (!pinnedWp || isWaypointHiddenForPlayer(player, state.pinnedWaypointKey)) {
+    if (
+      !pinnedWp ||
+      isWaypointHiddenForPlayer(player, state.pinnedWaypointKey)
+    ) {
       state.pinnedWaypointKey = null;
       pinnedWp = null;
     } else if (pinnedWp.source === "death") {
@@ -1143,7 +1229,10 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
         // インベントリ内にリカバリーコンパスを持っていない間は表示しない（固定キーは保持）
         pinnedWp = null;
       }
-    } else if (isPlayerHoldingRecoveryCompass(player) && state.recoveryCompassDeathOnly) {
+    } else if (
+      isPlayerHoldingRecoveryCompass(player) &&
+      state.recoveryCompassDeathOnly
+    ) {
       // 死亡地点のみ表示モード中は通常ウェイポイントの固定表示も一時停止
       pinnedWp = null;
     }
@@ -1155,13 +1244,22 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
     const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
     if (nearbyTarget) {
       activeWaypoint = nearbyTarget.waypoint;
-      isPinnedActive = pinnedWp !== null && getWaypointKey(activeWaypoint) === state.pinnedWaypointKey;
+      isPinnedActive =
+        pinnedWp !== null &&
+        getWaypointKey(activeWaypoint) === state.pinnedWaypointKey;
     } else if (player.isSneaking) {
       // 2. コンパスを持ってスニーク中: 視野角15度以内の最寄りウェイポイントを検出（固定選択プレビュー）
-      const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+      const closestHit = findRayClosestWaypoint(
+        virtHead,
+        viewDir,
+        player.dimension.id,
+        player,
+      );
       if (closestHit) {
         activeWaypoint = closestHit.waypoint;
-        isPinnedActive = pinnedWp !== null && getWaypointKey(activeWaypoint) === state.pinnedWaypointKey;
+        isPinnedActive =
+          pinnedWp !== null &&
+          getWaypointKey(activeWaypoint) === state.pinnedWaypointKey;
       } else if (pinnedWp) {
         activeWaypoint = pinnedWp;
         isPinnedActive = true;
@@ -1203,7 +1301,12 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
     state.wasShowingHUD = true;
   } else if (activeWaypoint) {
     const actionTag = isPinnedActive && isHolding ? "§6[固定]" : "";
-    const text = formatWaypointHUDText(player, activeWaypoint, actionTag, isZoomed);
+    const text = formatWaypointHUDText(
+      player,
+      activeWaypoint,
+      actionTag,
+      isZoomed,
+    );
     try {
       player.onScreenDisplay.setActionBar(text);
       state.wasShowingHUD = true;
@@ -1226,7 +1329,9 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
 /**
  * アイテムにシルクタッチのエンチャントが付与されているか判定
  */
-export function hasSilkTouchEnchantment(itemStack: ItemStack | undefined): boolean {
+export function hasSilkTouchEnchantment(
+  itemStack: ItemStack | undefined,
+): boolean {
   if (!itemStack) return false;
   try {
     const enchantable = itemStack.getComponent("minecraft:enchantable");
@@ -1290,9 +1395,13 @@ export function handleSilkTouchWaypointDelete(
 
   try {
     player.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cを削除しました`);
-    player.onScreenDisplay.setActionBar(`§c[Waypoint] §f${deletedDisplayName} §cを削除しました`);
+    player.onScreenDisplay.setActionBar(
+      `§c[Waypoint] §f${deletedDisplayName} §cを削除しました`,
+    );
     if (targetWp.source !== "death") {
-      world.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cが ${player.name} によって削除されました`);
+      world.sendMessage(
+        `§c[Waypoint] §f${deletedDisplayName} §cが ${player.name} によって削除されました`,
+      );
     }
   } catch {}
 
@@ -1307,4 +1416,3 @@ export function handleSilkTouchWaypointDelete(
 
   return true;
 }
-
