@@ -3,10 +3,12 @@ import {
   system,
   EquipmentSlot,
   Vector3,
+  ItemStack,
 } from "@minecraft/server";
 import { displayHUDWaypoints, spawnWaypointParticle } from "./waypoint-utils";
 import {
   addWaypoint,
+  deleteWaypoint,
   waypointCache,
   loadWaypoints,
   hasWaypointAt,
@@ -22,11 +24,13 @@ import {
 } from "./waypoint.types";
 import {
   handleCompassVirtualNav,
+  handleCompassLeftClick,
   updatePlayerVirtualNavHUD,
   clearPlayerVirtualNav,
 } from "./virtual-nav";
 import {
   spawnWaypointMarker,
+  removeWaypointMarker,
   syncWaypointMarkers,
   correctWaypointMarkerPositions,
 } from "./waypoint-marker";
@@ -37,6 +41,20 @@ const lastPlacedBannerName = new Map<string, string | null>();
 
 // プレイヤーごとの「最後に持っていた旗の色」を保持するマップ
 const playerBannerColorCache = new Map<string, BannerColorName>();
+
+/**
+ * アイテムにシルクタッチのエンチャントが付与されているか判定
+ */
+function hasSilkTouchEnchantment(itemStack: ItemStack | undefined): boolean {
+  if (!itemStack) return false;
+  try {
+    const enchantable = itemStack.getComponent("minecraft:enchantable");
+    if (!enchantable) return false;
+    return enchantable.hasEnchantment("silk_touch");
+  } catch {
+    return false;
+  }
+}
 
 export function initWaypoints() {
   // 保存されているウェイポイントを DynamicProperty から復元
@@ -119,6 +137,40 @@ export function initWaypoints() {
     }
   });
 
+  // 腕を振る動作（左クリック）検知: コンパス所持時の非表示（遠隔）および表示・非表示切り替え（近接4m）
+  try {
+    const afterEvents = world.afterEvents as Record<string, any>;
+    if (afterEvents && typeof afterEvents.playerSwingStart?.subscribe === "function") {
+      afterEvents.playerSwingStart.subscribe((event: any) => {
+        try {
+          const { player, heldItemStack } = event;
+          if (!heldItemStack || heldItemStack.typeId !== "minecraft:compass") return;
+          handleCompassLeftClick(player, heldItemStack);
+        } catch (err) {
+          console.warn("[Waypoints] playerSwingStart ハンドラー内エラー:", err);
+        }
+      });
+    } else {
+      console.warn("[Waypoints] 現在の環境では playerSwingStart は未サポートです。");
+    }
+  } catch (e) {
+    console.warn("[Waypoints] playerSwingStart の登録に失敗しました（スキップ）:", e);
+  }
+
+  // playerSwingStart 未サポート環境向けのフォールバック（ブロック左クリック検知）
+  try {
+    const afterEvents = world.afterEvents as Record<string, any>;
+    if (afterEvents && typeof afterEvents.playerStartBreakingBlock?.subscribe === "function") {
+      afterEvents.playerStartBreakingBlock.subscribe((event: any) => {
+        try {
+          const { player, itemStack } = event;
+          if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
+          handleCompassLeftClick(player, itemStack);
+        } catch {}
+      });
+    }
+  } catch {}
+
   // ブロック設置時（旗の設置検知）
   world.afterEvents.playerPlaceBlock.subscribe((event) => {
     const { block, player } = event;
@@ -169,6 +221,18 @@ export function initWaypoints() {
           `§a[Waypoint] §f${player.name} §aがウェイポイント §f${displayName} §aを設置しました`,
         );
       } catch {}
+
+      // 設置完了効果音を再生
+      const dim = player.dimension;
+      const soundPos = { ...waypointPos };
+      system.run(() => {
+        try {
+          if (player && player.isValid) {
+            player.playSound("random.orb", { pitch: 1.2, volume: 1.0 });
+          }
+          dim.playSound("random.orb", soundPos, { pitch: 1.2, volume: 1.0 });
+        } catch {}
+      });
     } else {
       // 旗以外の装飾ブロック（石、金ブロック、木等）がウェイポイント座標に設置された場合、
       // ネームタグマーカーを確実に再スポーン (O(1))
@@ -176,6 +240,49 @@ export function initWaypoints() {
       const existingWp = getWaypointAt(player.dimension, bPos);
       if (existingWp) {
         spawnWaypointMarker(player.dimension, existingWp);
+      }
+    }
+  });
+
+  // ブロック破壊時（旗の破壊検知: デフォルトでは削除、シルクタッチ時は維持）
+  world.afterEvents.playerBreakBlock.subscribe((event) => {
+    const { block, brokenBlockPermutation, player, itemStackBeforeBreak } =
+      event;
+    const blockTypeId = brokenBlockPermutation.type.id;
+
+    if (
+      blockTypeId === "minecraft:standing_banner" ||
+      blockTypeId === "minecraft:wall_banner"
+    ) {
+      const blockPos = Vector3Utils.floor(block.location);
+      const waypoint = getWaypointAt(player.dimension, blockPos);
+
+      if (waypoint) {
+        // 使用したツールにシルクタッチが付与されているか判定
+        const usedItem =
+          itemStackBeforeBreak ??
+          player
+            .getComponent("minecraft:equippable")
+            ?.getEquipment(EquipmentSlot.Mainhand);
+
+        if (hasSilkTouchEnchantment(usedItem)) {
+          // シルクタッチ付きツールの場合はウェイポイントをその場に残す
+          return;
+        }
+
+        // デフォルト: 旗破壊と同時にウェイポイントを削除
+        deleteWaypoint(player.dimension, waypoint.pos);
+        const key = getWaypointKey(waypoint);
+        removeWaypointMarker(player.dimension, key, waypoint.pos);
+
+        const displayName = getWaypointDisplayName(waypoint);
+        try {
+          player.sendMessage(`§c[Waypoint] §f${displayName} §cを削除しました`);
+          player.playSound("random.break", { pitch: 1.2, volume: 1.0 });
+          world.sendMessage(
+            `§c[Waypoint] §f${displayName} §cが ${player.name} によって削除されました`,
+          );
+        } catch {}
       }
     }
   });
@@ -198,15 +305,21 @@ export function initWaypoints() {
 
   // ウェイポイント実体位置のパーティクル表示（全プレイヤーに見える）
   system.runInterval(() => {
-    for (let waypoint of waypointCache) {
-      spawnWaypointParticle({
-        dimension: waypoint.dim,
-        location: waypoint.pos,
-        color: BANNER_COLOR_RGBS[waypoint.color],
-        size: 1,
-        durationTicks: 11,
-      });
-    }
+    try {
+      for (let waypoint of waypointCache) {
+        try {
+          const colorRgb =
+            BANNER_COLOR_RGBS[waypoint.color] ?? { r: 1, g: 1, b: 1 };
+          spawnWaypointParticle({
+            dimension: waypoint.dim,
+            location: waypoint.pos,
+            color: colorRgb,
+            size: 1,
+            durationTicks: 11,
+          });
+        } catch {}
+      }
+    } catch {}
   }, 10);
 
   // 毎tick更新により、10tickのイージングズームおよび視点追従、各プレイヤー専用ナビゲーションHUDをなめらかに描画

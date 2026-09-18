@@ -14,6 +14,7 @@ import {
   getWaypointKey,
   isPlayerHoldingCompass,
   getPinnedWaypointKey,
+  isWaypointHiddenForPlayer,
 } from "./virtual-nav";
 
 /**
@@ -70,29 +71,38 @@ export function spawnWaypointParticle(options: WaypointParticleOptions): void {
 
   if (!location) return;
 
-  const dim =
-    typeof dimension === "string"
-      ? world.getDimension(
-          dimension.includes(":") ? dimension : `minecraft:${dimension}`,
-        )
-      : dimension;
+  try {
+    const dim =
+      typeof dimension === "string"
+        ? world.getDimension(
+            dimension.includes(":") ? dimension : `minecraft:${dimension}`,
+          )
+        : dimension;
+    if (!dim) return;
 
-  // tick (20 tick = 1秒) を秒数 (float) に変換
-  const lifetimeSeconds = Math.max(0.05, durationTicks / 20.0);
+    // tick (20 tick = 1秒) を秒数 (float) に変換
+    const lifetimeSeconds = Math.max(0.05, durationTicks / 20.0);
+    const safeColor = color ?? { r: 1, g: 1, b: 1 };
 
-  const molang = new MolangVariableMap();
-  molang.setFloat("variable.marker_size", Math.max(0.01, size));
-  molang.setFloat("variable.color.r", color.r);
-  molang.setFloat("variable.color.g", color.g);
-  molang.setFloat("variable.color.b", color.b);
-  molang.setFloat("variable.lifetime", lifetimeSeconds);
-  molang.setColorRGB("variable.color", {
-    red: color.r,
-    green: color.g,
-    blue: color.b,
-  });
+    const molang = new MolangVariableMap();
+    molang.setFloat("variable.marker_size", Math.max(0.01, size));
+    molang.setFloat("variable.color.r", safeColor.r);
+    molang.setFloat("variable.color.g", safeColor.g);
+    molang.setFloat("variable.color.b", safeColor.b);
+    molang.setFloat("variable.color_r", safeColor.r);
+    molang.setFloat("variable.color_g", safeColor.g);
+    molang.setFloat("variable.color_b", safeColor.b);
+    molang.setFloat("variable.lifetime", lifetimeSeconds);
+    molang.setColorRGB("variable.color", {
+      red: safeColor.r,
+      green: safeColor.g,
+      blue: safeColor.b,
+    });
 
-  dim.spawnParticle("mining_utility:hud_marker", location, molang);
+    dim.spawnParticle("mining_utility:waypoint_particle", location, molang);
+  } catch (e) {
+    // チャンク未ロードやディメンションエラー等でスポーン失敗してもタイマーをクラッシュさせない
+  }
 }
 
 /**
@@ -187,6 +197,9 @@ export function displayHUDWaypoints(player: Player) {
         : `minecraft:${waypoint.dim}`;
       if (waypointDimension !== dimension.id) continue;
 
+      const wpKey = getWaypointKey(waypoint);
+      if (isWaypointHiddenForPlayer(player, wpKey)) continue;
+
       const targetX = waypoint.pos.x;
       const targetY = waypoint.pos.y;
       const targetZ = waypoint.pos.z;
@@ -209,7 +222,6 @@ export function displayHUDWaypoints(player: Player) {
       const projZ = headLoc.z + (dz / safeDist) * projDist;
 
       // 相似比に基づく見かけサイズ
-      const wpKey = getWaypointKey(waypoint);
       const isFocused = focusedKey !== null && wpKey === focusedKey;
       const sizeMultiplier = isFocused ? HUD_MARKER_CONFIG.focusZoom : 1.0;
 

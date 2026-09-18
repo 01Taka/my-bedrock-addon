@@ -1877,6 +1877,30 @@ var ZOOM_ANIM_DURATION_TICKS = 10;
 var COS_15_DEG = Math.cos(15 * Math.PI / 180);
 var playerVirtualNavMap = /* @__PURE__ */ new Map();
 var playerFocusedWaypointMap = /* @__PURE__ */ new Map();
+var playerHiddenWaypointsMap = /* @__PURE__ */ new Map();
+function isWaypointHiddenForPlayer(player, wpKey) {
+  const hiddenSet = playerHiddenWaypointsMap.get(player.id);
+  if (!hiddenSet) return false;
+  return hiddenSet.has(wpKey);
+}
+function setWaypointHiddenForPlayer(player, wpKey, hidden) {
+  let hiddenSet = playerHiddenWaypointsMap.get(player.id);
+  if (!hiddenSet) {
+    hiddenSet = /* @__PURE__ */ new Set();
+    playerHiddenWaypointsMap.set(player.id, hiddenSet);
+  }
+  if (hidden) {
+    hiddenSet.add(wpKey);
+  } else {
+    hiddenSet.delete(wpKey);
+  }
+}
+function toggleWaypointHiddenForPlayer(player, wpKey) {
+  const currentHidden = isWaypointHiddenForPlayer(player, wpKey);
+  const nextHidden = !currentHidden;
+  setWaypointHiddenForPlayer(player, wpKey, nextHidden);
+  return nextHidden;
+}
 function getWaypointKey2(wp) {
   const shortDim = wp.dim.replace(/^minecraft:/, "");
   return `${shortDim}@${Math.floor(wp.pos.x)},${Math.floor(wp.pos.y)},${Math.floor(wp.pos.z)}`;
@@ -1892,6 +1916,7 @@ function getPlayerVirtualNav(player) {
 function clearPlayerVirtualNav(playerId) {
   playerVirtualNavMap.delete(playerId);
   playerFocusedWaypointMap.delete(playerId);
+  playerHiddenWaypointsMap.delete(playerId);
 }
 function getPinnedWaypointKey(player) {
   const state = playerVirtualNavMap.get(player.id);
@@ -1938,11 +1963,14 @@ function getVirtualHeadLocation(player) {
     z: headLoc.z + offset.z
   };
 }
-function findRayClosestWaypoint(origin, direction, dimensionId) {
+function findRayClosestWaypoint(origin, direction, dimensionId, player) {
   let closest = null;
   for (const wp of waypointCache) {
     const wpDim = wp.dim.includes(":") ? wp.dim : `minecraft:${wp.dim}`;
     if (wpDim !== dimensionId) continue;
+    if (player && isWaypointHiddenForPlayer(player, getWaypointKey2(wp))) {
+      continue;
+    }
     const dx = wp.pos.x - origin.x;
     const dy = wp.pos.y - origin.y;
     const dz = wp.pos.z - origin.z;
@@ -2031,11 +2059,14 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
       wasHoldingCompass: true,
       pinnedWaypointKey: null,
       wasShowingHUD: false,
-      unpinNoticeUntilTick: 0
+      unpinNoticeUntilTick: 0,
+      lastLeftClickTick: 0,
+      noticeText: null,
+      noticeUntilTick: 0
     };
     playerVirtualNavMap.set(player.id, state);
   }
-  if (currentTick - state.lastUseTick < 5) {
+  if (!player.isSneaking && currentTick - state.lastUseTick < 5) {
     cancelCallback?.();
     return;
   }
@@ -2067,38 +2098,68 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
       }
       removeWaypointMarker(player.dimension, deletedKey, matchedWaypoint.pos);
       const deletedDisplayName = getWaypointDisplayName(matchedWaypoint);
+      const wpPos = { ...matchedWaypoint.pos };
+      const dim = player.dimension;
       try {
         player.sendMessage(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
         player.onScreenDisplay.setActionBar(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
-        player.playSound("random.break", { pitch: 1.2, volume: 1 });
         world6.sendMessage(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`);
       } catch {
       }
+      system4.run(() => {
+        try {
+          if (player && player.isValid) {
+            player.playSound("random.break", { pitch: 1.2, volume: 1 });
+          }
+          dim.playSound("random.break", wpPos, { pitch: 1.2, volume: 1 });
+        } catch {
+        }
+      });
       return;
     }
   }
   if (player.isSneaking) {
-    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id);
+    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
     if (closestHit) {
       const key = getWaypointKey2(closestHit.waypoint);
-      state.pinnedWaypointKey = key;
-      state.unpinNoticeUntilTick = 0;
       const hitDisplayName = getWaypointDisplayName(closestHit.waypoint);
-      try {
-        player.onScreenDisplay.setActionBar(
-          `\xA76[Waypoint] \xA7f${hitDisplayName} \xA76\u3092\u56FA\u5B9A\u3057\u307E\u3057\u305F`
-        );
-        player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
-      } catch {
-      }
-    } else if (state.pinnedWaypointKey !== null) {
-      state.pinnedWaypointKey = null;
-      state.unpinNoticeUntilTick = currentTick + 15;
-      state.wasShowingHUD = true;
-      try {
-        player.onScreenDisplay.setActionBar("\xA77[\u56FA\u5B9A\u89E3\u9664]");
-        player.playSound("random.break", { pitch: 1, volume: 0.8 });
-      } catch {
+      if (state.pinnedWaypointKey === key) {
+        state.pinnedWaypointKey = null;
+        state.unpinNoticeUntilTick = currentTick + 15;
+        state.noticeText = "\xA77[\u56FA\u5B9A\u89E3\u9664]";
+        state.noticeUntilTick = currentTick + 15;
+        state.wasShowingHUD = true;
+        try {
+          player.onScreenDisplay.setActionBar("\xA77[\u56FA\u5B9A\u89E3\u9664]");
+        } catch {
+        }
+        system4.run(() => {
+          try {
+            if (player && player.isValid) {
+              player.playSound("random.break", { pitch: 1, volume: 0.8 });
+            }
+          } catch {
+          }
+        });
+      } else {
+        state.pinnedWaypointKey = key;
+        state.unpinNoticeUntilTick = 0;
+        state.noticeText = null;
+        state.noticeUntilTick = 0;
+        try {
+          player.onScreenDisplay.setActionBar(
+            `\xA76[Waypoint] \xA7f${hitDisplayName} \xA76\u3092\u56FA\u5B9A\u3057\u307E\u3057\u305F`
+          );
+        } catch {
+        }
+        system4.run(() => {
+          try {
+            if (player && player.isValid) {
+              player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
+            }
+          } catch {
+          }
+        });
       }
     }
     return;
@@ -2159,6 +2220,134 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
   } catch {
   }
 }
+function handleCompassLeftClick(player, itemStack) {
+  if (!(player instanceof Player6) || !player.isValid) return;
+  if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
+  const currentTick = system4.currentTick;
+  let state = playerVirtualNavMap.get(player.id);
+  if (!state) {
+    state = {
+      targetOffset: { x: 0, y: 0, z: 0 },
+      startOffset: { x: 0, y: 0, z: 0 },
+      animStartTick: currentTick,
+      animDurationTicks: ZOOM_ANIM_DURATION_TICKS,
+      lastUseTick: 0,
+      wasHoldingCompass: true,
+      pinnedWaypointKey: null,
+      wasShowingHUD: false,
+      unpinNoticeUntilTick: 0,
+      lastLeftClickTick: 0,
+      noticeText: null,
+      noticeUntilTick: 0
+    };
+    playerVirtualNavMap.set(player.id, state);
+  }
+  if (currentTick - state.lastLeftClickTick < 4) {
+    return;
+  }
+  state.lastLeftClickTick = currentTick;
+  const headLoc = player.getHeadLocation();
+  const viewDir = normalize(player.getViewDirection());
+  const currentOffset = getCurrentVirtualOffset(player);
+  const virtHead = {
+    x: headLoc.x + currentOffset.x,
+    y: headLoc.y + currentOffset.y,
+    z: headLoc.z + currentOffset.z
+  };
+  const isZoomed = Math.abs(currentOffset.x) > 0.01 || Math.abs(currentOffset.y) > 0.01 || Math.abs(currentOffset.z) > 0.01 || Math.abs(state.targetOffset.x) > 0.01 || Math.abs(state.targetOffset.y) > 0.01 || Math.abs(state.targetOffset.z) > 0.01;
+  const zoomPrefix = isZoomed ? "\xA77\u30BA\u30FC\u30E0\u4E2D / " : "";
+  if (!isZoomed) {
+    const currentDim = player.dimension.id.replace(/^minecraft:/, "");
+    let closeTargetWp = null;
+    let closestDist = 999;
+    const COS_30_DEG = Math.cos(30 * Math.PI / 180);
+    for (const wp of waypointCache) {
+      const wpDim = wp.dim.replace(/^minecraft:/, "");
+      if (wpDim !== currentDim) continue;
+      const dx = wp.pos.x - headLoc.x;
+      const dy = wp.pos.y - headLoc.y;
+      const dz = wp.pos.z - headLoc.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist <= 4 && dist > 0.01) {
+        const dirX = dx / dist;
+        const dirY = dy / dist;
+        const dirZ = dz / dist;
+        const dot = viewDir.x * dirX + viewDir.y * dirY + viewDir.z * dirZ;
+        if (dot >= COS_30_DEG && dist < closestDist) {
+          closestDist = dist;
+          closeTargetWp = wp;
+        }
+      }
+    }
+    if (closeTargetWp) {
+      const wpKey = getWaypointKey2(closeTargetWp);
+      const isNowHidden = toggleWaypointHiddenForPlayer(player, wpKey);
+      const displayName = getWaypointDisplayName(closeTargetWp);
+      const realDist = Math.round(closestDist);
+      const arrow = getRelative8DirectionArrow(player, closeTargetWp.pos);
+      if (isNowHidden && state.pinnedWaypointKey === wpKey) {
+        state.pinnedWaypointKey = null;
+      }
+      state.noticeUntilTick = currentTick + 15;
+      state.wasShowingHUD = true;
+      if (isNowHidden) {
+        state.noticeText = `\xA77[\u975E\u8868\u793A] \xA7e${displayName} \xA7f${realDist}m \xA7b${arrow}`;
+        system4.run(() => {
+          try {
+            if (player && player.isValid) {
+              player.playSound("random.break", { pitch: 1, volume: 0.8 });
+            }
+          } catch {
+          }
+        });
+      } else {
+        state.noticeText = `\xA7a[\u8868\u793A] \xA7e${displayName} \xA7f${realDist}m \xA7b${arrow}`;
+        system4.run(() => {
+          try {
+            if (player && player.isValid) {
+              player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
+            }
+          } catch {
+          }
+        });
+      }
+      try {
+        player.onScreenDisplay.setActionBar(state.noticeText);
+      } catch {
+      }
+      return;
+    }
+  }
+  const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+  if (closestHit) {
+    const key = getWaypointKey2(closestHit.waypoint);
+    const hitDisplayName = getWaypointDisplayName(closestHit.waypoint);
+    setWaypointHiddenForPlayer(player, key, true);
+    if (state.pinnedWaypointKey === key) {
+      state.pinnedWaypointKey = null;
+    }
+    const hDx = closestHit.waypoint.pos.x - headLoc.x;
+    const hDy = closestHit.waypoint.pos.y - headLoc.y;
+    const hDz = closestHit.waypoint.pos.z - headLoc.z;
+    const hDist = Math.round(Math.sqrt(hDx * hDx + hDy * hDy + hDz * hDz));
+    const hArrow = getRelative8DirectionArrow(player, closestHit.waypoint.pos);
+    state.noticeText = `${zoomPrefix}\xA7c[\u975E\u8868\u793A] \xA7e${hitDisplayName} \xA7f${hDist}m \xA7b${hArrow}`;
+    state.noticeUntilTick = currentTick + 15;
+    state.wasShowingHUD = true;
+    try {
+      player.onScreenDisplay.setActionBar(state.noticeText);
+    } catch {
+    }
+    system4.run(() => {
+      try {
+        if (player && player.isValid) {
+          player.playSound("random.break", { pitch: 1, volume: 0.9 });
+        }
+      } catch {
+      }
+    });
+  }
+}
 function updatePlayerVirtualNavHUD(player) {
   const currentTick = system4.currentTick;
   let state = playerVirtualNavMap.get(player.id);
@@ -2172,7 +2361,10 @@ function updatePlayerVirtualNavHUD(player) {
       wasHoldingCompass: false,
       pinnedWaypointKey: null,
       wasShowingHUD: false,
-      unpinNoticeUntilTick: 0
+      unpinNoticeUntilTick: 0,
+      lastLeftClickTick: 0,
+      noticeText: null,
+      noticeUntilTick: 0
     };
     playerVirtualNavMap.set(player.id, state);
   }
@@ -2206,12 +2398,13 @@ function updatePlayerVirtualNavHUD(player) {
         break;
       }
     }
-    if (!pinnedWp) {
+    if (!pinnedWp || isWaypointHiddenForPlayer(player, state.pinnedWaypointKey)) {
       state.pinnedWaypointKey = null;
+      pinnedWp = null;
     }
   }
   if (isHolding && player.isSneaking) {
-    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id);
+    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
     if (closestHit) {
       activeWaypoint = closestHit.waypoint;
       isPinnedActive = pinnedWp !== null && getWaypointKey2(activeWaypoint) === state.pinnedWaypointKey;
@@ -2228,7 +2421,13 @@ function updatePlayerVirtualNavHUD(player) {
   playerFocusedWaypointMap.set(player.id, activeWaypoint);
   const isZoomed = isHolding && (Math.abs(currentOffset.x) > 0.01 || Math.abs(currentOffset.y) > 0.01 || Math.abs(currentOffset.z) > 0.01 || Math.abs(state.targetOffset.x) > 0.01 || Math.abs(state.targetOffset.y) > 0.01 || Math.abs(state.targetOffset.z) > 0.01);
   const zoomPrefix = isZoomed ? "\xA77\u30BA\u30FC\u30E0\u4E2D / " : "";
-  if (currentTick < state.unpinNoticeUntilTick) {
+  if (currentTick < state.noticeUntilTick && state.noticeText) {
+    try {
+      player.onScreenDisplay.setActionBar(state.noticeText);
+    } catch {
+    }
+    state.wasShowingHUD = true;
+  } else if (currentTick < state.unpinNoticeUntilTick) {
     try {
       player.onScreenDisplay.setActionBar("\xA77[\u56FA\u5B9A\u89E3\u9664]");
     } catch {
@@ -2273,22 +2472,30 @@ function updatePlayerVirtualNavHUD(player) {
 function spawnWaypointParticle(options) {
   const { dimension, location, color, size, durationTicks } = options;
   if (!location) return;
-  const dim = typeof dimension === "string" ? world7.getDimension(
-    dimension.includes(":") ? dimension : `minecraft:${dimension}`
-  ) : dimension;
-  const lifetimeSeconds = Math.max(0.05, durationTicks / 20);
-  const molang = new MolangVariableMap();
-  molang.setFloat("variable.marker_size", Math.max(0.01, size));
-  molang.setFloat("variable.color.r", color.r);
-  molang.setFloat("variable.color.g", color.g);
-  molang.setFloat("variable.color.b", color.b);
-  molang.setFloat("variable.lifetime", lifetimeSeconds);
-  molang.setColorRGB("variable.color", {
-    red: color.r,
-    green: color.g,
-    blue: color.b
-  });
-  dim.spawnParticle("mining_utility:hud_marker", location, molang);
+  try {
+    const dim = typeof dimension === "string" ? world7.getDimension(
+      dimension.includes(":") ? dimension : `minecraft:${dimension}`
+    ) : dimension;
+    if (!dim) return;
+    const lifetimeSeconds = Math.max(0.05, durationTicks / 20);
+    const safeColor = color ?? { r: 1, g: 1, b: 1 };
+    const molang = new MolangVariableMap();
+    molang.setFloat("variable.marker_size", Math.max(0.01, size));
+    molang.setFloat("variable.color.r", safeColor.r);
+    molang.setFloat("variable.color.g", safeColor.g);
+    molang.setFloat("variable.color.b", safeColor.b);
+    molang.setFloat("variable.color_r", safeColor.r);
+    molang.setFloat("variable.color_g", safeColor.g);
+    molang.setFloat("variable.color_b", safeColor.b);
+    molang.setFloat("variable.lifetime", lifetimeSeconds);
+    molang.setColorRGB("variable.color", {
+      red: safeColor.r,
+      green: safeColor.g,
+      blue: safeColor.b
+    });
+    dim.spawnParticle("mining_utility:waypoint_particle", location, molang);
+  } catch (e) {
+  }
 }
 function spawnWaypointParticleForPlayer(options) {
   const { player, location, color, size, durationTicks, dimension } = options;
@@ -2341,6 +2548,8 @@ function displayHUDWaypoints(player) {
     try {
       const waypointDimension = waypoint.dim.includes(":") ? waypoint.dim : `minecraft:${waypoint.dim}`;
       if (waypointDimension !== dimension.id) continue;
+      const wpKey = getWaypointKey2(waypoint);
+      if (isWaypointHiddenForPlayer(player, wpKey)) continue;
       const targetX = waypoint.pos.x;
       const targetY = waypoint.pos.y;
       const targetZ = waypoint.pos.z;
@@ -2354,7 +2563,6 @@ function displayHUDWaypoints(player) {
       const projX = headLoc.x + dx / safeDist * projDist;
       const projY = headLoc.y + dy / safeDist * projDist;
       const projZ = headLoc.z + dz / safeDist * projDist;
-      const wpKey = getWaypointKey2(waypoint);
       const isFocused = focusedKey !== null && wpKey === focusedKey;
       const sizeMultiplier = isFocused ? HUD_MARKER_CONFIG.focusZoom : 1;
       const apparentSize = HUD_MARKER_CONFIG.baseSize * (projDist / safeDist);
@@ -2380,6 +2588,16 @@ function displayHUDWaypoints(player) {
 // src/waypoint/waypoints.ts
 var lastPlacedBannerName = /* @__PURE__ */ new Map();
 var playerBannerColorCache = /* @__PURE__ */ new Map();
+function hasSilkTouchEnchantment(itemStack) {
+  if (!itemStack) return false;
+  try {
+    const enchantable = itemStack.getComponent("minecraft:enchantable");
+    if (!enchantable) return false;
+    return enchantable.hasEnchantment("silk_touch");
+  } catch {
+    return false;
+  }
+}
 function initWaypoints() {
   loadWaypoints();
   system5.runTimeout(() => {
@@ -2446,6 +2664,38 @@ function initWaypoints() {
       }
     }
   });
+  try {
+    const afterEvents = world8.afterEvents;
+    if (afterEvents && typeof afterEvents.playerSwingStart?.subscribe === "function") {
+      afterEvents.playerSwingStart.subscribe((event) => {
+        try {
+          const { player, heldItemStack } = event;
+          if (!heldItemStack || heldItemStack.typeId !== "minecraft:compass") return;
+          handleCompassLeftClick(player, heldItemStack);
+        } catch (err) {
+          console.warn("[Waypoints] playerSwingStart \u30CF\u30F3\u30C9\u30E9\u30FC\u5185\u30A8\u30E9\u30FC:", err);
+        }
+      });
+    } else {
+      console.warn("[Waypoints] \u73FE\u5728\u306E\u74B0\u5883\u3067\u306F playerSwingStart \u306F\u672A\u30B5\u30DD\u30FC\u30C8\u3067\u3059\u3002");
+    }
+  } catch (e) {
+    console.warn("[Waypoints] playerSwingStart \u306E\u767B\u9332\u306B\u5931\u6557\u3057\u307E\u3057\u305F\uFF08\u30B9\u30AD\u30C3\u30D7\uFF09:", e);
+  }
+  try {
+    const afterEvents = world8.afterEvents;
+    if (afterEvents && typeof afterEvents.playerStartBreakingBlock?.subscribe === "function") {
+      afterEvents.playerStartBreakingBlock.subscribe((event) => {
+        try {
+          const { player, itemStack } = event;
+          if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
+          handleCompassLeftClick(player, itemStack);
+        } catch {
+        }
+      });
+    }
+  } catch {
+  }
   world8.afterEvents.playerPlaceBlock.subscribe((event) => {
     const { block, player } = event;
     if (block.typeId === "minecraft:standing_banner" || block.typeId === "minecraft:wall_banner") {
@@ -2479,11 +2729,48 @@ function initWaypoints() {
         );
       } catch {
       }
+      const dim = player.dimension;
+      const soundPos = { ...waypointPos };
+      system5.run(() => {
+        try {
+          if (player && player.isValid) {
+            player.playSound("random.orb", { pitch: 1.2, volume: 1 });
+          }
+          dim.playSound("random.orb", soundPos, { pitch: 1.2, volume: 1 });
+        } catch {
+        }
+      });
     } else {
       const bPos = Vector3Utils.floor(block.location);
       const existingWp = getWaypointAt(player.dimension, bPos);
       if (existingWp) {
         spawnWaypointMarker(player.dimension, existingWp);
+      }
+    }
+  });
+  world8.afterEvents.playerBreakBlock.subscribe((event) => {
+    const { block, brokenBlockPermutation, player, itemStackBeforeBreak } = event;
+    const blockTypeId = brokenBlockPermutation.type.id;
+    if (blockTypeId === "minecraft:standing_banner" || blockTypeId === "minecraft:wall_banner") {
+      const blockPos = Vector3Utils.floor(block.location);
+      const waypoint = getWaypointAt(player.dimension, blockPos);
+      if (waypoint) {
+        const usedItem = itemStackBeforeBreak ?? player.getComponent("minecraft:equippable")?.getEquipment(EquipmentSlot6.Mainhand);
+        if (hasSilkTouchEnchantment(usedItem)) {
+          return;
+        }
+        deleteWaypoint(player.dimension, waypoint.pos);
+        const key = getWaypointKey(waypoint);
+        removeWaypointMarker(player.dimension, key, waypoint.pos);
+        const displayName = getWaypointDisplayName(waypoint);
+        try {
+          player.sendMessage(`\xA7c[Waypoint] \xA7f${displayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
+          player.playSound("random.break", { pitch: 1.2, volume: 1 });
+          world8.sendMessage(
+            `\xA7c[Waypoint] \xA7f${displayName} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`
+          );
+        } catch {
+        }
       }
     }
   });
@@ -2502,14 +2789,21 @@ function initWaypoints() {
     }
   }, 2);
   system5.runInterval(() => {
-    for (let waypoint of waypointCache) {
-      spawnWaypointParticle({
-        dimension: waypoint.dim,
-        location: waypoint.pos,
-        color: BANNER_COLOR_RGBS[waypoint.color],
-        size: 1,
-        durationTicks: 11
-      });
+    try {
+      for (let waypoint of waypointCache) {
+        try {
+          const colorRgb = BANNER_COLOR_RGBS[waypoint.color] ?? { r: 1, g: 1, b: 1 };
+          spawnWaypointParticle({
+            dimension: waypoint.dim,
+            location: waypoint.pos,
+            color: colorRgb,
+            size: 1,
+            durationTicks: 11
+          });
+        } catch {
+        }
+      }
+    } catch {
     }
   }, 10);
   system5.runInterval(() => {
@@ -2613,12 +2907,16 @@ export {
   getVirtualHeadLocation,
   getWaypointKey2 as getWaypointKey,
   getWaypointMarkerNameTag,
+  handleCompassLeftClick,
   handleCompassVirtualNav,
   isPlayerHoldingCompass,
+  isWaypointHiddenForPlayer,
   removeWaypointMarker,
+  setWaypointHiddenForPlayer,
   spawnWaypointMarker,
   spawnWaypointParticle,
   spawnWaypointParticleForPlayer,
   syncWaypointMarkers,
+  toggleWaypointHiddenForPlayer,
   updatePlayerVirtualNavHUD
 };

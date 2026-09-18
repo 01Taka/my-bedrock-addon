@@ -24,6 +24,11 @@ export interface VirtualNavState {
   pinnedWaypointKey: string | null; // 固定されたウェイポイントの一意キー
   wasShowingHUD: boolean; // HUD表示中フラグ (即時消去用)
   unpinNoticeUntilTick: number; // 固定解除メッセージ表示終了tick
+  // クールダウン用
+  lastLeftClickTick: number; // 左クリックの連打防止用 tick
+  // 通知HUD演出用（[非表示] / [表示] / [固定解除]）
+  noticeText: string | null;
+  noticeUntilTick: number;
 }
 
 export const SPHERE_RADIUS = 30.0;
@@ -35,6 +40,42 @@ const COS_15_DEG = Math.cos((15 * Math.PI) / 180); // 約 0.9659258
 
 const playerVirtualNavMap = new Map<string, VirtualNavState>();
 const playerFocusedWaypointMap = new Map<string, Waypoint | null>();
+const playerHiddenWaypointsMap = new Map<string, Set<string>>();
+
+/**
+ * プレイヤーごとの非表示ウェイポイント判定
+ */
+export function isWaypointHiddenForPlayer(player: Player, wpKey: string): boolean {
+  const hiddenSet = playerHiddenWaypointsMap.get(player.id);
+  if (!hiddenSet) return false;
+  return hiddenSet.has(wpKey);
+}
+
+/**
+ * プレイヤーの特定ウェイポイントの非表示設定/解除
+ */
+export function setWaypointHiddenForPlayer(player: Player, wpKey: string, hidden: boolean): void {
+  let hiddenSet = playerHiddenWaypointsMap.get(player.id);
+  if (!hiddenSet) {
+    hiddenSet = new Set<string>();
+    playerHiddenWaypointsMap.set(player.id, hiddenSet);
+  }
+  if (hidden) {
+    hiddenSet.add(wpKey);
+  } else {
+    hiddenSet.delete(wpKey);
+  }
+}
+
+/**
+ * プレイヤーの特定ウェイポイントの非表示状態をトグル (返り値: トグル後に非表示ならtrue, 表示ならfalse)
+ */
+export function toggleWaypointHiddenForPlayer(player: Player, wpKey: string): boolean {
+  const currentHidden = isWaypointHiddenForPlayer(player, wpKey);
+  const nextHidden = !currentHidden;
+  setWaypointHiddenForPlayer(player, wpKey, nextHidden);
+  return nextHidden;
+}
 
 /**
  * ウェイポイントの一意キーを取得
@@ -66,6 +107,7 @@ export function getPlayerVirtualNav(player: Player): VirtualNavState | undefined
 export function clearPlayerVirtualNav(playerId: string): void {
   playerVirtualNavMap.delete(playerId);
   playerFocusedWaypointMap.delete(playerId);
+  playerHiddenWaypointsMap.delete(playerId);
 }
 
 /**
@@ -144,12 +186,18 @@ export function findRayClosestWaypoint(
   origin: Vector3,
   direction: Vector3,
   dimensionId: string,
+  player?: Player,
 ): { waypoint: Waypoint; perpendicularDist: number } | null {
   let closest: { waypoint: Waypoint; perpendicularDist: number } | null = null;
 
   for (const wp of waypointCache) {
     const wpDim = wp.dim.includes(":") ? wp.dim : `minecraft:${wp.dim}`;
     if (wpDim !== dimensionId) continue;
+
+    // プレイヤーが指定されており、そのプレイヤーが非表示に設定している場合はスキップ
+    if (player && isWaypointHiddenForPlayer(player, getWaypointKey(wp))) {
+      continue;
+    }
 
     const dx = wp.pos.x - origin.x;
     const dy = wp.pos.y - origin.y;
@@ -294,12 +342,16 @@ export function handleCompassVirtualNav(
       pinnedWaypointKey: null,
       wasShowingHUD: false,
       unpinNoticeUntilTick: 0,
+      lastLeftClickTick: 0,
+      noticeText: null,
+      noticeUntilTick: 0,
     };
     playerVirtualNavMap.set(player.id, state);
   }
 
-  // 5 tick (0.25秒) のクールダウンで連打・誤爆を防止
-  if (currentTick - state.lastUseTick < 5) {
+  // 5 tick (0.25秒) のクールダウンでズーム誤爆等を防止
+  // ただしスニーク中のダブルクリックは通過させる
+  if (!player.isSneaking && currentTick - state.lastUseTick < 5) {
     cancelCallback?.();
     return;
   }
@@ -343,46 +395,81 @@ export function handleCompassVirtualNav(
       removeWaypointMarker(player.dimension, deletedKey, matchedWaypoint.pos);
 
       const deletedDisplayName = getWaypointDisplayName(matchedWaypoint);
+      const wpPos = { ...matchedWaypoint.pos };
+      const dim = player.dimension;
+
       try {
         player.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cを削除しました`);
         player.onScreenDisplay.setActionBar(`§c[Waypoint] §f${deletedDisplayName} §cを削除しました`);
-        player.playSound("random.break", { pitch: 1.2, volume: 1.0 });
         world.sendMessage(`§c[Waypoint] §f${deletedDisplayName} §cが ${player.name} によって削除されました`);
       } catch {}
+
+      // beforeEvents のイベントキャンセルや read-only 制約と競合して音が消えるのを防ぐため、system.run で確実に再生
+      system.run(() => {
+        try {
+          if (player && player.isValid) {
+            player.playSound("random.break", { pitch: 1.2, volume: 1.0 });
+          }
+          dim.playSound("random.break", wpPos, { pitch: 1.2, volume: 1.0 });
+        } catch {}
+      });
       return;
     }
   }
 
   // ----------------------------------------------------
-  // シフトあり右クリック: 視野角15度による「固定」または「解除」
+  // シフトあり右クリック: 視野角15度による「固定」または「固定解除」（トグル）
   // ----------------------------------------------------
   if (player.isSneaking) {
-    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id);
+    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
 
     if (closestHit) {
-      // 視野角15度以内にウェイポイントがある場合: 固定（上書き更新）
       const key = getWaypointKey(closestHit.waypoint);
-      state.pinnedWaypointKey = key;
-      state.unpinNoticeUntilTick = 0;
       const hitDisplayName = getWaypointDisplayName(closestHit.waypoint);
-      try {
-        player.onScreenDisplay.setActionBar(
-          `§6[Waypoint] §f${hitDisplayName} §6を固定しました`,
-        );
-        player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
-      } catch {}
-    } else if (state.pinnedWaypointKey !== null) {
-      // 元々固定されていた場合のみ解除通知を表示
-      state.pinnedWaypointKey = null;
-      state.unpinNoticeUntilTick = currentTick + 15; // 15 tick (0.75秒) 表示後に即座クリア
-      state.wasShowingHUD = true;
-      try {
-        player.onScreenDisplay.setActionBar("§7[固定解除]");
-        player.playSound("random.break", { pitch: 1.0, volume: 0.8 });
-      } catch {}
+
+      if (state.pinnedWaypointKey === key) {
+        // 既に固定されているウェイポイント -> 固定解除（トグルOFF）
+        state.pinnedWaypointKey = null;
+        state.unpinNoticeUntilTick = currentTick + 15; // 15 tick (0.75秒) 表示後に即座クリア
+        state.noticeText = "§7[固定解除]";
+        state.noticeUntilTick = currentTick + 15;
+        state.wasShowingHUD = true;
+        try {
+          player.onScreenDisplay.setActionBar("§7[固定解除]");
+        } catch {}
+        system.run(() => {
+          try {
+            if (player && player.isValid) {
+              player.playSound("random.break", { pitch: 1.0, volume: 0.8 });
+            }
+          } catch {}
+        });
+      } else {
+        // 未固定のウェイポイント -> 固定（トグルON）
+        state.pinnedWaypointKey = key;
+        state.unpinNoticeUntilTick = 0;
+        state.noticeText = null;
+        state.noticeUntilTick = 0;
+        try {
+          player.onScreenDisplay.setActionBar(
+            `§6[Waypoint] §f${hitDisplayName} §6を固定しました`,
+          );
+        } catch {}
+        system.run(() => {
+          try {
+            if (player && player.isValid) {
+              player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
+            }
+          } catch {}
+        });
+      }
     }
     return;
   }
+
+  // ----------------------------------------------------
+  // シフトなし右クリック: ズーム（仮想前進）
+  // ----------------------------------------------------
 
   // ----------------------------------------------------
   // シフトなし右クリック: ズーム（仮想前進）
@@ -455,6 +542,179 @@ export function handleCompassVirtualNav(
 }
 
 /**
+ * コンパス所持時に左クリック（腕を振る / playerSwingStart）した時のハンドラー:
+ * - 4m以内（非ズーム時）: 表示 / 非表示 のトグル切り替え
+ * - 4m超 または ズーム時: 対象ウェイポイントの遠隔非表示化（OFF）
+ */
+export function handleCompassLeftClick(
+  player: Player,
+  itemStack?: ItemStack,
+): void {
+  if (!(player instanceof Player) || !player.isValid) return;
+  if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
+
+  const currentTick = system.currentTick;
+  let state = playerVirtualNavMap.get(player.id);
+  if (!state) {
+    state = {
+      targetOffset: { x: 0, y: 0, z: 0 },
+      startOffset: { x: 0, y: 0, z: 0 },
+      animStartTick: currentTick,
+      animDurationTicks: ZOOM_ANIM_DURATION_TICKS,
+      lastUseTick: 0,
+      wasHoldingCompass: true,
+      pinnedWaypointKey: null,
+      wasShowingHUD: false,
+      unpinNoticeUntilTick: 0,
+      lastLeftClickTick: 0,
+      noticeText: null,
+      noticeUntilTick: 0,
+    };
+    playerVirtualNavMap.set(player.id, state);
+  }
+
+  // 4 tick (0.2秒) のクールダウンで連打・誤爆防止
+  if (currentTick - state.lastLeftClickTick < 4) {
+    return;
+  }
+  state.lastLeftClickTick = currentTick;
+
+  const headLoc = player.getHeadLocation();
+  const viewDir = normalize(player.getViewDirection());
+  const currentOffset = getCurrentVirtualOffset(player);
+  const virtHead: Vector3 = {
+    x: headLoc.x + currentOffset.x,
+    y: headLoc.y + currentOffset.y,
+    z: headLoc.z + currentOffset.z,
+  };
+
+  const isZoomed =
+    Math.abs(currentOffset.x) > 0.01 ||
+    Math.abs(currentOffset.y) > 0.01 ||
+    Math.abs(currentOffset.z) > 0.01 ||
+    Math.abs(state.targetOffset.x) > 0.01 ||
+    Math.abs(state.targetOffset.y) > 0.01 ||
+    Math.abs(state.targetOffset.z) > 0.01;
+
+  const zoomPrefix = isZoomed ? "§7ズーム中 / " : "";
+
+  // ----------------------------------------------------
+  // 1. 近く（4m以内、非ズーム時）での表示・非表示トグル
+  // ----------------------------------------------------
+  if (!isZoomed) {
+    const currentDim = player.dimension.id.replace(/^minecraft:/, "");
+    let closeTargetWp: Waypoint | null = null;
+    let closestDist = 999;
+    const COS_30_DEG = Math.cos((30 * Math.PI) / 180); // 約 0.866
+
+    for (const wp of waypointCache) {
+      const wpDim = wp.dim.replace(/^minecraft:/, "");
+      if (wpDim !== currentDim) continue;
+
+      const dx = wp.pos.x - headLoc.x;
+      const dy = wp.pos.y - headLoc.y;
+      const dz = wp.pos.z - headLoc.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+      if (dist <= 4.0 && dist > 0.01) {
+        const dirX = dx / dist;
+        const dirY = dy / dist;
+        const dirZ = dz / dist;
+        const dot = viewDir.x * dirX + viewDir.y * dirY + viewDir.z * dirZ;
+
+        if (dot >= COS_30_DEG && dist < closestDist) {
+          closestDist = dist;
+          closeTargetWp = wp;
+        }
+      }
+    }
+
+    if (closeTargetWp) {
+      const wpKey = getWaypointKey(closeTargetWp);
+      const isNowHidden = toggleWaypointHiddenForPlayer(player, wpKey);
+      const displayName = getWaypointDisplayName(closeTargetWp);
+      const realDist = Math.round(closestDist);
+      const arrow = getRelative8DirectionArrow(player, closeTargetWp.pos);
+
+      // もし非表示にした対象が現在固定されていたら固定解除
+      if (isNowHidden && state.pinnedWaypointKey === wpKey) {
+        state.pinnedWaypointKey = null;
+      }
+
+      state.noticeUntilTick = currentTick + 15; // 15 tick (0.75秒) 表示
+      state.wasShowingHUD = true;
+
+      if (isNowHidden) {
+        state.noticeText = `§7[非表示] §e${displayName} §f${realDist}m §b${arrow}`;
+        system.run(() => {
+          try {
+            if (player && player.isValid) {
+              player.playSound("random.break", { pitch: 1.0, volume: 0.8 });
+            }
+          } catch {}
+        });
+      } else {
+        state.noticeText = `§a[表示] §e${displayName} §f${realDist}m §b${arrow}`;
+        system.run(() => {
+          try {
+            if (player && player.isValid) {
+              player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
+            }
+          } catch {}
+        });
+      }
+
+      try {
+        player.onScreenDisplay.setActionBar(state.noticeText);
+      } catch {}
+
+      return;
+    }
+  }
+
+  // ----------------------------------------------------
+  // 2. 遠隔（4m超またはズーム時）での非表示化（OFF）
+  // ----------------------------------------------------
+  // 表示中のウェイポイント（未非表示）を対象に視線検索
+  const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+
+  if (closestHit) {
+    const key = getWaypointKey(closestHit.waypoint);
+    const hitDisplayName = getWaypointDisplayName(closestHit.waypoint);
+
+    // 非表示化を実行
+    setWaypointHiddenForPlayer(player, key, true);
+
+    // もし固定されていたら固定解除
+    if (state.pinnedWaypointKey === key) {
+      state.pinnedWaypointKey = null;
+    }
+
+    const hDx = closestHit.waypoint.pos.x - headLoc.x;
+    const hDy = closestHit.waypoint.pos.y - headLoc.y;
+    const hDz = closestHit.waypoint.pos.z - headLoc.z;
+    const hDist = Math.round(Math.sqrt(hDx * hDx + hDy * hDy + hDz * hDz));
+    const hArrow = getRelative8DirectionArrow(player, closestHit.waypoint.pos);
+
+    state.noticeText = `${zoomPrefix}§c[非表示] §e${hitDisplayName} §f${hDist}m §b${hArrow}`;
+    state.noticeUntilTick = currentTick + 15; // 15 tick (0.75秒) 一瞬表示
+    state.wasShowingHUD = true;
+
+    try {
+      player.onScreenDisplay.setActionBar(state.noticeText);
+    } catch {}
+
+    system.run(() => {
+      try {
+        if (player && player.isValid) {
+          player.playSound("random.break", { pitch: 1.0, volume: 0.9 });
+        }
+      } catch {}
+    });
+  }
+}
+
+/**
  * 毎tick実行されるHUDナビゲーション更新＆持ち替え検知処理
  */
 export function updatePlayerVirtualNavHUD(player: Player): void {
@@ -472,6 +732,9 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
       pinnedWaypointKey: null,
       wasShowingHUD: false,
       unpinNoticeUntilTick: 0,
+      lastLeftClickTick: 0,
+      noticeText: null,
+      noticeUntilTick: 0,
     };
     playerVirtualNavMap.set(player.id, state);
   }
@@ -521,15 +784,16 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
         break;
       }
     }
-    // もしキャッシュから消えていれば固定解除
-    if (!pinnedWp) {
+    // もしキャッシュから消えているか、非表示に設定されていれば固定解除
+    if (!pinnedWp || isWaypointHiddenForPlayer(player, state.pinnedWaypointKey)) {
       state.pinnedWaypointKey = null;
+      pinnedWp = null;
     }
   }
 
   if (isHolding && player.isSneaking) {
     // コンパスを持ってスニーク中: 視野角15度以内の最寄りウェイポイントを検出（固定選択プレビュー）
-    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id);
+    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
     if (closestHit) {
       activeWaypoint = closestHit.waypoint;
       isPinnedActive = pinnedWp !== null && getWaypointKey(activeWaypoint) === state.pinnedWaypointKey;
@@ -564,7 +828,13 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
   // ----------------------------------------------------
   // 画面中央下部（アクションバー）へのUI表示: 「名前 〇m ↑」
   // ----------------------------------------------------
-  if (currentTick < state.unpinNoticeUntilTick) {
+  if (currentTick < state.noticeUntilTick && state.noticeText) {
+    // トグル・非表示完了・解除などの一瞬表示メッセージ
+    try {
+      player.onScreenDisplay.setActionBar(state.noticeText);
+    } catch {}
+    state.wasShowingHUD = true;
+  } else if (currentTick < state.unpinNoticeUntilTick) {
     // 固定解除メッセージ表示期間中: 固定解除テキストを最優先で維持
     try {
       player.onScreenDisplay.setActionBar("§7[固定解除]");
