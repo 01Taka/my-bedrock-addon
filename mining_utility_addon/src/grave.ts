@@ -29,6 +29,109 @@ interface GraveData {
   origGroundType: string;
 }
 
+export type RecoveryCompassMode = 1 | 2 | 3;
+export const RECOVERY_COMPASS_SETTING_KEY = "setting_recovery_compass";
+
+let cachedRecoveryCompassMode: RecoveryCompassMode | undefined;
+
+/**
+ * リカバリーコンパスの設定値を取得（ワールド共通、デフォルトは 1: lost）
+ */
+export function getRecoveryCompassMode(): RecoveryCompassMode {
+  try {
+    const val = world.getDynamicProperty(RECOVERY_COMPASS_SETTING_KEY);
+    if (typeof val === "number" && (val === 1 || val === 2 || val === 3)) {
+      cachedRecoveryCompassMode = val;
+      return val;
+    }
+  } catch (e) {}
+
+  if (cachedRecoveryCompassMode !== undefined) {
+    return cachedRecoveryCompassMode;
+  }
+  return 1;
+}
+
+/**
+ * リカバリーコンパスの設定値を保存（ワールド共通）
+ */
+export function setRecoveryCompassMode(mode: RecoveryCompassMode): void {
+  cachedRecoveryCompassMode = mode;
+  try {
+    world.setDynamicProperty(RECOVERY_COMPASS_SETTING_KEY, mode);
+  } catch (e) {
+    console.error("リカバリーコンパス設定保存エラー:", e);
+  }
+}
+
+/**
+ * リカバリーコンパス設定の説明テキストを取得
+ */
+export function getRecoveryCompassModeDescription(mode: RecoveryCompassMode): string {
+  switch (mode) {
+    case 1:
+      return "lost (墓の中に含める・デフォルト)";
+    case 2:
+      return "keep (インベントリ内にキープ)";
+    case 3:
+      return "give (キープ＋未所持なら自動付与)";
+  }
+}
+
+const pendingCompassGrantPlayerIds = new Set<string>();
+
+/**
+ * プレイヤーがリカバリーコンパスを持っていなければインベントリに付与
+ */
+export function giveRecoveryCompassIfMissing(player: Player): boolean {
+  try {
+    const invComp = player.getComponent(EntityComponentTypes.Inventory) as
+      | EntityInventoryComponent
+      | undefined;
+    const inv = invComp?.container;
+    if (!inv) return false;
+
+    // 既にインベントリ内にリカバリーコンパスがあるか確認
+    for (let i = 0; i < inv.size; i++) {
+      const item = inv.getItem(i);
+      if (item && item.typeId === "minecraft:recovery_compass") {
+        return false;
+      }
+    }
+    // オフハンドの確認
+    const equippable = player.getComponent(EntityComponentTypes.Equippable) as
+      | EntityEquippableComponent
+      | undefined;
+    if (equippable) {
+      const offhand = equippable.getEquipment(EquipmentSlot.Offhand);
+      if (offhand && offhand.typeId === "minecraft:recovery_compass") {
+        return false;
+      }
+    }
+
+    inv.addItem(new ItemStack("minecraft:recovery_compass", 1));
+    return true;
+  } catch (e) {
+    console.error("リカバリーコンパス付与エラー:", e);
+    return false;
+  }
+}
+
+/**
+ * プレイヤーリスポーン時のリカバリーコンパス補給ハンドラー
+ */
+export function handleGravePlayerSpawn(player: Player): void {
+  const compassMode = getRecoveryCompassMode();
+  if (compassMode === 3 && pendingCompassGrantPlayerIds.has(player.id)) {
+    pendingCompassGrantPlayerIds.delete(player.id);
+    system.run(() => {
+      if (giveRecoveryCompassIfMissing(player)) {
+        player.sendMessage("§a[墓] 死亡地点を示すリカバリーコンパスを付与しました。");
+      }
+    });
+  }
+}
+
 /**
  * プレイヤー死亡時の墓生成ハンドラー
  */
@@ -53,6 +156,9 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
     z: Math.floor(player.location.z),
   };
 
+  const compassMode = getRecoveryCompassMode();
+  let hasRecoveryCompass = false;
+
   const items: ItemStack[] = [];
 
   // 1. 通常インベントリからアイテムをコピー（インベントリからはまだ削除しない）
@@ -64,6 +170,13 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
     for (let i = 0; i < inv.size; i++) {
       const item = inv.getItem(i);
       if (item) {
+        if (item.typeId === "minecraft:recovery_compass") {
+          hasRecoveryCompass = true;
+          if (compassMode === 2 || compassMode === 3) {
+            // モード2または3では墓チェストへ含めずインベントリにキープ
+            continue;
+          }
+        }
         items.push(item.clone());
       }
     }
@@ -84,12 +197,31 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
     for (const slot of slots) {
       const item = equippable.getEquipment(slot);
       if (item) {
+        if (item.typeId === "minecraft:recovery_compass") {
+          hasRecoveryCompass = true;
+          if (compassMode === 2 || compassMode === 3) {
+            // モード2または3では墓チェストへ含めずインベントリ/装備にキープ
+            continue;
+          }
+        }
         items.push(item.clone());
       }
     }
   }
 
-  if (items.length === 0) return;
+  // モード3でコンパス未所持の場合、リスポーン時または死亡時に付与する対象として登録
+  if (compassMode === 3 && !hasRecoveryCompass) {
+    pendingCompassGrantPlayerIds.add(playerId);
+  }
+
+  if (items.length === 0) {
+    if (compassMode === 3 && !hasRecoveryCompass) {
+      system.run(() => {
+        giveRecoveryCompassIfMissing(player);
+      });
+    }
+    return;
+  }
 
   system.run(() => {
     try {
@@ -151,6 +283,13 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
         for (let i = 0; i < inv.size; i++) {
           const item = inv.getItem(i);
           if (item) {
+            if (
+              (compassMode === 2 || compassMode === 3) &&
+              item.typeId === "minecraft:recovery_compass"
+            ) {
+              // モード2または3ではリカバリーコンパスをインベントリ内にキープ
+              continue;
+            }
             inv.setItem(i, undefined);
           }
         }
@@ -159,9 +298,21 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
         for (const slot of slots) {
           const item = equippable.getEquipment(slot);
           if (item) {
+            if (
+              (compassMode === 2 || compassMode === 3) &&
+              item.typeId === "minecraft:recovery_compass"
+            ) {
+              // モード2または3ではリカバリーコンパスを装備/オフハンドにキープ
+              continue;
+            }
             equippable.setEquipment(slot, undefined);
           }
         }
+      }
+
+      // 3. モード3かつ死亡時にコンパスを持っていなかった場合はインベントリに新規付与
+      if (compassMode === 3 && !hasRecoveryCompass) {
+        giveRecoveryCompassIfMissing(player);
       }
 
       // 3. 墓石の設置位置の判定

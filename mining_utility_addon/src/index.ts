@@ -9,8 +9,12 @@ import {
   handleGraveEntityDie,
   handleGraveBeforeInteract,
   handleGraveBeforeBreak,
+  handleGravePlayerSpawn,
 } from "./grave";
-import { handleSettingsScriptEvent, handleSettingsItemUse } from "./settings";
+import {
+  handleSettingsScriptEvent,
+  handleSettingsItemUse,
+} from "./settings";
 import { initWaypoints } from "./waypoint/waypoints";
 import "./map";
 export * from "./waypoint/waypoint-utils";
@@ -65,5 +69,24 @@ system.afterEvents.scriptEventReceive.subscribe((event) => {
     handleSettingsScriptEvent(event);
   } catch (error) {
     console.error("イベント処理エラー:", error);
+  }
+});
+
+// リスポーン検知 (墓機能: リカバリーコンパス付与補正) & 初回スポーン時ガイド
+world.afterEvents.playerSpawn.subscribe((event) => {
+  const player = event.player;
+  if (!player) return;
+
+  handleGravePlayerSpawn(player);
+
+  if (event.initialSpawn) {
+    system.run(() => {
+      try {
+        player.sendMessage(
+          `§6[Mining & Utility Addon] §aロード完了\n` +
+            `§7※ 木の剣 (Wooden Sword) を持って画面長押し(右クリック)で設定画面が開きます。`,
+        );
+      } catch {}
+    });
   }
 });

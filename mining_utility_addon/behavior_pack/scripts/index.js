@@ -248,7 +248,7 @@ import { BlockVolume } from "@minecraft/server";
 
 // src/mass-destruction.ts
 import {
-  EquipmentSlot as EquipmentSlot2,
+  EquipmentSlot as EquipmentSlot3,
   GameMode
 } from "@minecraft/server";
 
@@ -290,11 +290,350 @@ function getEnchantmentLevel(item, enchantment) {
 
 // src/settings.ts
 import {
-  world,
-  Player as Player2,
-  system
+  world as world2,
+  Player as Player3,
+  system as system2
 } from "@minecraft/server";
 import { ModalFormData } from "@minecraft/server-ui";
+
+// src/grave.ts
+import {
+  world,
+  system,
+  EquipmentSlot as EquipmentSlot2,
+  EntityComponentTypes,
+  BlockComponentTypes,
+  ItemStack as ItemStack2,
+  Player as Player2
+} from "@minecraft/server";
+var RECOVERY_COMPASS_SETTING_KEY = "setting_recovery_compass";
+var cachedRecoveryCompassMode;
+function getRecoveryCompassMode() {
+  try {
+    const val = world.getDynamicProperty(RECOVERY_COMPASS_SETTING_KEY);
+    if (typeof val === "number" && (val === 1 || val === 2 || val === 3)) {
+      cachedRecoveryCompassMode = val;
+      return val;
+    }
+  } catch (e) {
+  }
+  if (cachedRecoveryCompassMode !== void 0) {
+    return cachedRecoveryCompassMode;
+  }
+  return 1;
+}
+function setRecoveryCompassMode(mode) {
+  cachedRecoveryCompassMode = mode;
+  try {
+    world.setDynamicProperty(RECOVERY_COMPASS_SETTING_KEY, mode);
+  } catch (e) {
+    console.error("\u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u8A2D\u5B9A\u4FDD\u5B58\u30A8\u30E9\u30FC:", e);
+  }
+}
+function getRecoveryCompassModeDescription(mode) {
+  switch (mode) {
+    case 1:
+      return "lost (\u5893\u306E\u4E2D\u306B\u542B\u3081\u308B\u30FB\u30C7\u30D5\u30A9\u30EB\u30C8)";
+    case 2:
+      return "keep (\u30A4\u30F3\u30D9\u30F3\u30C8\u30EA\u5185\u306B\u30AD\u30FC\u30D7)";
+    case 3:
+      return "give (\u30AD\u30FC\u30D7\uFF0B\u672A\u6240\u6301\u306A\u3089\u81EA\u52D5\u4ED8\u4E0E)";
+  }
+}
+var pendingCompassGrantPlayerIds = /* @__PURE__ */ new Set();
+function giveRecoveryCompassIfMissing(player) {
+  try {
+    const invComp = player.getComponent(EntityComponentTypes.Inventory);
+    const inv = invComp?.container;
+    if (!inv) return false;
+    for (let i = 0; i < inv.size; i++) {
+      const item = inv.getItem(i);
+      if (item && item.typeId === "minecraft:recovery_compass") {
+        return false;
+      }
+    }
+    const equippable = player.getComponent(EntityComponentTypes.Equippable);
+    if (equippable) {
+      const offhand = equippable.getEquipment(EquipmentSlot2.Offhand);
+      if (offhand && offhand.typeId === "minecraft:recovery_compass") {
+        return false;
+      }
+    }
+    inv.addItem(new ItemStack2("minecraft:recovery_compass", 1));
+    return true;
+  } catch (e) {
+    console.error("\u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u4ED8\u4E0E\u30A8\u30E9\u30FC:", e);
+    return false;
+  }
+}
+function handleGravePlayerSpawn(player) {
+  const compassMode = getRecoveryCompassMode();
+  if (compassMode === 3 && pendingCompassGrantPlayerIds.has(player.id)) {
+    pendingCompassGrantPlayerIds.delete(player.id);
+    system.run(() => {
+      if (giveRecoveryCompassIfMissing(player)) {
+        player.sendMessage("\xA7a[\u5893] \u6B7B\u4EA1\u5730\u70B9\u3092\u793A\u3059\u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u3092\u4ED8\u4E0E\u3057\u307E\u3057\u305F\u3002");
+      }
+    });
+  }
+}
+function handleGraveEntityDie(event) {
+  const deadEntity = event.deadEntity;
+  if (!(deadEntity instanceof Player2)) return;
+  const player = deadEntity;
+  if (!isSettingEnabled(player, SETTING_KEYS.GRAVE)) {
+    return;
+  }
+  const dimension = player.dimension;
+  const playerName = player.nameTag || player.id || "Player";
+  const playerId = player.id;
+  const basePos = {
+    x: Math.floor(player.location.x),
+    y: Math.max(Math.floor(player.location.y), dimension.heightRange.min),
+    z: Math.floor(player.location.z)
+  };
+  const compassMode = getRecoveryCompassMode();
+  let hasRecoveryCompass = false;
+  const items = [];
+  const invComp = player.getComponent(EntityComponentTypes.Inventory);
+  const inv = invComp?.container;
+  if (inv) {
+    for (let i = 0; i < inv.size; i++) {
+      const item = inv.getItem(i);
+      if (item) {
+        if (item.typeId === "minecraft:recovery_compass") {
+          hasRecoveryCompass = true;
+          if (compassMode === 2 || compassMode === 3) {
+            continue;
+          }
+        }
+        items.push(item.clone());
+      }
+    }
+  }
+  const equippable = player.getComponent(EntityComponentTypes.Equippable);
+  const slots = [
+    EquipmentSlot2.Head,
+    EquipmentSlot2.Chest,
+    EquipmentSlot2.Legs,
+    EquipmentSlot2.Feet,
+    EquipmentSlot2.Offhand
+  ];
+  if (equippable) {
+    for (const slot of slots) {
+      const item = equippable.getEquipment(slot);
+      if (item) {
+        if (item.typeId === "minecraft:recovery_compass") {
+          hasRecoveryCompass = true;
+          if (compassMode === 2 || compassMode === 3) {
+            continue;
+          }
+        }
+        items.push(item.clone());
+      }
+    }
+  }
+  if (compassMode === 3 && !hasRecoveryCompass) {
+    pendingCompassGrantPlayerIds.add(playerId);
+  }
+  if (items.length === 0) {
+    if (compassMode === 3 && !hasRecoveryCompass) {
+      system.run(() => {
+        giveRecoveryCompassIfMissing(player);
+      });
+    }
+    return;
+  }
+  system.run(() => {
+    try {
+      let targetMinY = dimension.heightRange.min + 1;
+      while (targetMinY < dimension.heightRange.min + 20) {
+        const b1 = dimension.getBlock({
+          x: basePos.x,
+          y: targetMinY,
+          z: basePos.z
+        });
+        if (b1 && b1.typeId !== "minecraft:chest") {
+          break;
+        }
+        targetMinY++;
+      }
+      const hidePos1 = { x: basePos.x, y: targetMinY, z: basePos.z };
+      const hidePos2 = {
+        x: basePos.x + 1,
+        y: targetMinY,
+        z: basePos.z
+      };
+      const hideBlock1 = dimension.getBlock(hidePos1);
+      const hideBlock2 = dimension.getBlock(hidePos2);
+      if (!hideBlock1 || !hideBlock2) return;
+      const origType1 = hideBlock1.typeId;
+      const origType2 = hideBlock2.typeId;
+      hideBlock1.setType("minecraft:chest");
+      hideBlock2.setType("minecraft:chest");
+      const c1Comp = hideBlock1.getComponent(BlockComponentTypes.Inventory);
+      const c2Comp = hideBlock2.getComponent(BlockComponentTypes.Inventory);
+      const c1 = c1Comp?.container;
+      const c2 = c2Comp?.container;
+      let itemIdx = 0;
+      if (c1) {
+        for (let i = 0; i < c1.size && itemIdx < items.length; i++) {
+          c1.setItem(i, items[itemIdx++]);
+        }
+      }
+      if (c2 && itemIdx < items.length) {
+        for (let i = 0; i < c2.size && itemIdx < items.length; i++) {
+          c2.setItem(i, items[itemIdx++]);
+        }
+      }
+      if (inv) {
+        for (let i = 0; i < inv.size; i++) {
+          const item = inv.getItem(i);
+          if (item) {
+            if ((compassMode === 2 || compassMode === 3) && item.typeId === "minecraft:recovery_compass") {
+              continue;
+            }
+            inv.setItem(i, void 0);
+          }
+        }
+      }
+      if (equippable) {
+        for (const slot of slots) {
+          const item = equippable.getEquipment(slot);
+          if (item) {
+            if ((compassMode === 2 || compassMode === 3) && item.typeId === "minecraft:recovery_compass") {
+              continue;
+            }
+            equippable.setEquipment(slot, void 0);
+          }
+        }
+      }
+      if (compassMode === 3 && !hasRecoveryCompass) {
+        giveRecoveryCompassIfMissing(player);
+      }
+      let targetGraveBlock = dimension.getBlock(basePos);
+      let origGroundType = "minecraft:air";
+      const groundBlock0 = dimension.getBlock(basePos);
+      const groundBlock1 = dimension.getBlock({
+        x: basePos.x,
+        y: Math.min(basePos.y + 1, dimension.heightRange.max),
+        z: basePos.z
+      });
+      if (groundBlock0 && groundBlock0.isAir) {
+        targetGraveBlock = groundBlock0;
+        origGroundType = "minecraft:air";
+      } else if (groundBlock1 && groundBlock1.isAir) {
+        targetGraveBlock = groundBlock1;
+        origGroundType = "minecraft:air";
+      } else if (groundBlock0) {
+        targetGraveBlock = groundBlock0;
+        origGroundType = groundBlock0.typeId;
+      }
+      if (targetGraveBlock) {
+        const finalPos = targetGraveBlock.location;
+        targetGraveBlock.setType("minecraft:bedrock");
+        const graveKey = `grave_${finalPos.x}_${finalPos.y}_${finalPos.z}`;
+        const graveData = {
+          ownerId: playerId,
+          ownerName: playerName,
+          dimensionId: dimension.id,
+          allowOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
+          hideX: hidePos1.x,
+          hideY: targetMinY,
+          hideZ: hidePos1.z,
+          origType1,
+          origType2,
+          origGroundType
+        };
+        world.setDynamicProperty(graveKey, JSON.stringify(graveData));
+        world.sendMessage(
+          `\xA7c${playerName} \u306E\u5893\u304C\u751F\u6210\u3055\u308C\u307E\u3057\u305F [X: ${finalPos.x}, Y: ${finalPos.y}, Z: ${finalPos.z}]`
+        );
+      }
+    } catch (e) {
+      console.error("\u5893\u751F\u6210\u30A8\u30E9\u30FC: " + e);
+    }
+  });
+}
+function handleGraveBeforeInteract(event) {
+  const block = event.block;
+  const player = event.player;
+  const dimension = block.dimension;
+  const graveKey = `grave_${block.location.x}_${block.location.y}_${block.location.z}`;
+  const rawData = world.getDynamicProperty(graveKey);
+  if (typeof rawData !== "string") return;
+  event.cancel = true;
+  const data = JSON.parse(rawData);
+  if (data.ownerId !== player.id) {
+    const ownerAllows = data.allowOthers !== false;
+    const playerAllows = isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS);
+    if (!ownerAllows || !playerAllows) {
+      player.sendMessage(
+        `\xA7c\u3053\u308C\u306F ${data.ownerName} \u306E\u5893\u3067\u3059\uFF01\uFF08\u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE\u306F\u7121\u52B9\u5316\u3055\u308C\u3066\u3044\u307E\u3059\uFF09`
+      );
+      return;
+    }
+  }
+  system.run(() => {
+    try {
+      const hideBlock1 = dimension.getBlock({
+        x: data.hideX,
+        y: data.hideY,
+        z: data.hideZ
+      });
+      const hideBlock2 = dimension.getBlock({
+        x: data.hideX + 1,
+        y: data.hideY,
+        z: data.hideZ
+      });
+      for (const hideBlock of [hideBlock1, hideBlock2]) {
+        if (hideBlock) {
+          const comp = hideBlock.getComponent(BlockComponentTypes.Inventory);
+          const container = comp?.container;
+          if (container) {
+            for (let i = 0; i < container.size; i++) {
+              const item = container.getItem(i);
+              if (item) {
+                dimension.spawnItem(item, {
+                  x: block.location.x + 0.5,
+                  y: block.location.y + 1,
+                  z: block.location.z + 0.5
+                });
+                container.setItem(i, void 0);
+              }
+            }
+          }
+        }
+      }
+      if (hideBlock1) hideBlock1.setType(data.origType1);
+      if (hideBlock2) hideBlock2.setType(data.origType2);
+      block.setType(data.origGroundType || "minecraft:air");
+      world.setDynamicProperty(graveKey, void 0);
+      if (data.ownerId !== player.id) {
+        player.sendMessage(
+          `\xA7a${data.ownerName} \u306E\u5893\u304B\u3089\u3059\u3079\u3066\u306E\u30A2\u30A4\u30C6\u30E0\u3092\u56DE\u53CE\u3057\u307E\u3057\u305F\uFF01`
+        );
+      } else {
+        player.sendMessage(`\xA7a\u5893\u304B\u3089\u3059\u3079\u3066\u306E\u30A2\u30A4\u30C6\u30E0\u3092\u56DE\u53CE\u3057\u307E\u3057\u305F\uFF01`);
+      }
+    } catch (e) {
+      console.error("\u5893\u56DE\u53CE\u30A8\u30E9\u30FC: " + e);
+    }
+  });
+}
+function handleGraveBeforeBreak(event) {
+  const block = event.block;
+  const graveKey = `grave_${block.location.x}_${block.location.y}_${block.location.z}`;
+  const rawData = world.getDynamicProperty(graveKey);
+  if (typeof rawData === "string") {
+    event.cancel = true;
+    event.player.sendMessage(
+      `\xA7e\u5893\u77F3\u306F\u58CA\u305B\u307E\u305B\u3093\u3002\u53F3\u30AF\u30EA\u30C3\u30AF\u3067\u56DE\u53CE\u3057\u3066\u304F\u3060\u3055\u3044\u3002`
+    );
+  }
+}
+
+// src/settings.ts
 var SETTING_KEYS = {
   TREE: "setting_tree",
   ORE: "setting_ore",
@@ -302,51 +641,42 @@ var SETTING_KEYS = {
   GRAVE: "setting_grave",
   GRAVE_OTHERS: "setting_grave_others"
 };
-var memorySettingsFallback = /* @__PURE__ */ new Map();
-function getPlayerMemoryMap(player) {
-  const key = player.id || player.name || "default";
-  let map = memorySettingsFallback.get(key);
-  if (!map) {
-    map = /* @__PURE__ */ new Map();
-    memorySettingsFallback.set(key, map);
-  }
-  return map;
-}
-function isSettingEnabled(player, key, defaultValue = true) {
+var worldMemorySettings = /* @__PURE__ */ new Map();
+function isSettingEnabled(_player, key = SETTING_KEYS.GRAVE, defaultValue = true) {
   try {
-    const val = player.getDynamicProperty(key);
+    const val = world2.getDynamicProperty(key);
     if (typeof val === "boolean") {
       return val;
     }
   } catch (e) {
   }
-  const memMap = getPlayerMemoryMap(player);
-  if (memMap.has(key)) {
-    return memMap.get(key);
+  if (worldMemorySettings.has(key)) {
+    return worldMemorySettings.get(key);
   }
   return defaultValue;
 }
-function setSettingEnabled(player, key, enabled) {
+function setSettingEnabled(_player, key, enabled) {
   try {
-    player.setDynamicProperty(key, enabled);
+    world2.setDynamicProperty(key, enabled);
   } catch (e) {
     console.error(`\u8A2D\u5B9A\u4FDD\u5B58\u30A8\u30E9\u30FC [${key}]:`, e);
   }
-  getPlayerMemoryMap(player).set(key, enabled);
+  worldMemorySettings.set(key, enabled);
 }
-function getPlayerSettings(player) {
+function getPlayerSettings(_player) {
   return {
-    tree: isSettingEnabled(player, SETTING_KEYS.TREE),
-    ore: isSettingEnabled(player, SETTING_KEYS.ORE),
-    torch: isSettingEnabled(player, SETTING_KEYS.TORCH),
-    grave: isSettingEnabled(player, SETTING_KEYS.GRAVE),
-    graveOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS)
+    tree: isSettingEnabled(null, SETTING_KEYS.TREE),
+    ore: isSettingEnabled(null, SETTING_KEYS.ORE),
+    torch: isSettingEnabled(null, SETTING_KEYS.TORCH),
+    grave: isSettingEnabled(null, SETTING_KEYS.GRAVE),
+    graveOthers: isSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS)
   };
 }
 function showSettingsForm(player) {
   const current = getPlayerSettings(player);
+  const currentCompassMode = getRecoveryCompassMode();
   const form = new ModalFormData();
-  form.title("\xA7l\xA76\u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u8A2D\u5B9A");
+  form.title("\xA7l\xA76\u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u8A2D\u5B9A (\u30EF\u30FC\u30EB\u30C9\u5171\u901A)");
   form.toggle("\u6728\u306E\u7834\u58CA (\u4E00\u62EC\u4F10\u63A1)", { defaultValue: current.tree });
   form.toggle("\u9271\u77F3\u306E\u7834\u58CA (\u4E00\u62EC\u63A1\u6398)", { defaultValue: current.ore });
   form.toggle("\u30AA\u30D5\u30CF\u30F3\u30C9\u305F\u3044\u307E\u3064 (\u52D5\u7684\u5149\u6E90\u30FB\u6301\u3061\u66FF\u3048)", {
@@ -356,6 +686,15 @@ function showSettingsForm(player) {
   form.toggle("\u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE (\u4ED6\u4EBA\u306E\u5893\u77F3\u3092\u958B\u3051\u308B)", {
     defaultValue: current.graveOthers
   });
+  form.dropdown(
+    "\u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u306E\u6271\u3044",
+    [
+      "lost: \u5893\u306E\u4E2D\u306B\u542B\u3081\u308B (\u30C7\u30D5\u30A9\u30EB\u30C8)",
+      "keep: \u30A4\u30F3\u30D9\u30F3\u30C8\u30EA\u5185\u306B\u30AD\u30FC\u30D7",
+      "give: \u30AD\u30FC\u30D7\uFF0B\u672A\u6240\u6301\u306A\u3089\u81EA\u52D5\u4ED8\u4E0E"
+    ],
+    { defaultValueIndex: currentCompassMode - 1 }
+  );
   form.show(player).then((response) => {
     if (response.canceled || !response.formValues) return;
     const [
@@ -363,24 +702,34 @@ function showSettingsForm(player) {
       oreVal,
       torchVal,
       graveVal,
-      graveOthersVal
+      graveOthersVal,
+      compassIndex
     ] = response.formValues;
-    setSettingEnabled(player, SETTING_KEYS.TREE, treeVal);
-    setSettingEnabled(player, SETTING_KEYS.ORE, oreVal);
-    setSettingEnabled(player, SETTING_KEYS.TORCH, torchVal);
-    setSettingEnabled(player, SETTING_KEYS.GRAVE, graveVal);
-    setSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS, graveOthersVal);
-    world.gameRules.keepInventory = graveVal;
+    setSettingEnabled(null, SETTING_KEYS.TREE, treeVal);
+    setSettingEnabled(null, SETTING_KEYS.ORE, oreVal);
+    setSettingEnabled(null, SETTING_KEYS.TORCH, torchVal);
+    setSettingEnabled(null, SETTING_KEYS.GRAVE, graveVal);
+    setSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS, graveOthersVal);
+    world2.gameRules.keepInventory = graveVal;
+    let compassMsg = "";
+    if (typeof compassIndex === "number") {
+      const newCompassMode = compassIndex + 1;
+      if (newCompassMode !== currentCompassMode) {
+        setRecoveryCompassMode(newCompassMode);
+      }
+      compassMsg = `\u30FB\u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9: \xA7e${getRecoveryCompassModeDescription(newCompassMode)}\xA7f
+`;
+    }
     const statusText = (val) => val ? "\xA7a[ON]\xA7r" : "\xA7c[OFF]\xA7r";
-    player.sendMessage(
+    world2.sendMessage(
       `\xA7a============================
-\xA76\u3010\u30A2\u30C9\u30AA\u30F3\u8A2D\u5B9A\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3011
+\xA76\u3010\u30EF\u30FC\u30EB\u30C9\u5171\u901A\u8A2D\u5B9A\u3092\u66F4\u65B0\u3057\u307E\u3057\u305F\u3011 (\u5909\u66F4\u8005: ${player.name})
 \xA7f\u30FB\u6728\u306E\u7834\u58CA: ${statusText(treeVal)}
 \u30FB\u9271\u77F3\u306E\u7834\u58CA: ${statusText(oreVal)}
 \u30FB\u30AA\u30D5\u30CF\u30F3\u30C9\u305F\u3044\u307E\u3064: ${statusText(torchVal)}
 \u30FB\u5893\u6A5F\u80FD: ${statusText(graveVal)}
 \u30FB\u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE: ${statusText(graveOthersVal)}
-\xA7a============================`
+` + compassMsg + `\xA7a============================`
     );
   }).catch((error) => {
     console.error("\u8A2D\u5B9AUI\u8868\u793A\u30A8\u30E9\u30FC:", error);
@@ -409,9 +758,9 @@ function handleSettingsScriptEvent(event) {
     cmd = rawId;
     arg = rawMsg;
   }
-  const allOnlinePlayers = world.getAllPlayers();
+  const allOnlinePlayers = world2.getAllPlayers();
   let targets = [];
-  if (event.sourceEntity && (event.sourceEntity instanceof Player2 || event.sourceEntity.typeId === "minecraft:player")) {
+  if (event.sourceEntity && (event.sourceEntity instanceof Player3 || event.sourceEntity.typeId === "minecraft:player")) {
     targets = [event.sourceEntity];
   } else if (arg) {
     const targetName = arg.split(/\s+/)[0];
@@ -430,14 +779,14 @@ function handleSettingsScriptEvent(event) {
     return;
   }
   const primaryPlayer = targets[0];
-  const isServerSource = !(event.sourceEntity instanceof Player2);
+  const isServerSource = !(event.sourceEntity instanceof Player3);
   switch (cmd) {
     case "menu":
     case "setting":
     case "settings":
     case "config":
     case "ui": {
-      system.run(() => {
+      system2.run(() => {
         showSettingsForm(primaryPlayer);
       });
       break;
@@ -446,87 +795,107 @@ function handleSettingsScriptEvent(event) {
       let next;
       if (arg === "on" || arg === "true" || arg === "1") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.TREE);
+      else next = !isSettingEnabled(null, SETTING_KEYS.TREE);
+      setSettingEnabled(null, SETTING_KEYS.TREE, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.TREE, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {
         }
-        p.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u6728\u306E\u7834\u58CA (\u4E00\u62EC\u4F10\u63A1) \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u6728\u306E\u7834\u58CA (\u4E00\u62EC\u4F10\u63A1) \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
-      }
+      world2.sendMessage(
+        `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u6728\u306E\u7834\u58CA (\u4E00\u62EC\u4F10\u63A1) \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+      );
       break;
     }
     case "ore": {
       let next;
       if (arg === "on" || arg === "true" || arg === "1") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.ORE);
+      else next = !isSettingEnabled(null, SETTING_KEYS.ORE);
+      setSettingEnabled(null, SETTING_KEYS.ORE, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.ORE, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {
         }
-        p.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u9271\u77F3\u306E\u7834\u58CA (\u4E00\u62EC\u63A1\u6398) \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u9271\u77F3\u306E\u7834\u58CA (\u4E00\u62EC\u63A1\u6398) \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
-      }
+      world2.sendMessage(
+        `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u9271\u77F3\u306E\u7834\u58CA (\u4E00\u62EC\u63A1\u6398) \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+      );
       break;
     }
     case "torch": {
       let next;
       if (arg === "on" || arg === "true" || arg === "1") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.TORCH);
+      else next = !isSettingEnabled(null, SETTING_KEYS.TORCH);
+      setSettingEnabled(null, SETTING_KEYS.TORCH, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.TORCH, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {
         }
-        p.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u30AA\u30D5\u30CF\u30F3\u30C9\u305F\u3044\u307E\u3064 \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u30AA\u30D5\u30CF\u30F3\u30C9\u305F\u3044\u307E\u3064 \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
-      }
+      world2.sendMessage(
+        `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u30AA\u30D5\u30CF\u30F3\u30C9\u305F\u3044\u307E\u3064 \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+      );
       break;
     }
     case "grave": {
+      if (arg === "lost" || arg === "1" || arg === "all") {
+        setRecoveryCompassMode(1);
+        world2.sendMessage(
+          `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u8A2D\u5B9A\u3092 \xA7e\u300C${getRecoveryCompassModeDescription(1)}\u300D\xA76 \u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+        );
+        break;
+      }
+      if (arg === "keep" || arg === "2") {
+        setRecoveryCompassMode(2);
+        world2.sendMessage(
+          `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u8A2D\u5B9A\u3092 \xA7e\u300C${getRecoveryCompassModeDescription(2)}\u300D\xA76 \u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+        );
+        break;
+      }
+      if (arg === "give" || arg === "auto" || arg === "3") {
+        setRecoveryCompassMode(3);
+        world2.sendMessage(
+          `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u8A2D\u5B9A\u3092 \xA7e\u300C${getRecoveryCompassModeDescription(3)}\u300D\xA76 \u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+        );
+        break;
+      }
       let next;
-      if (arg === "on" || arg === "true" || arg === "1") next = true;
+      if (arg === "on" || arg === "true") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.GRAVE);
-      world.gameRules.keepInventory = next;
+      else next = !isSettingEnabled(null, SETTING_KEYS.GRAVE);
+      world2.gameRules.keepInventory = next;
+      setSettingEnabled(null, SETTING_KEYS.GRAVE, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.GRAVE, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {
         }
-        p.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u5893\u6A5F\u80FD \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u5893\u6A5F\u80FD \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+      world2.sendMessage(
+        `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u5893\u6A5F\u80FD \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+      );
+      break;
+    }
+    case "compass": {
+      let targetMode = null;
+      if (arg === "lost" || arg === "1" || arg === "all") targetMode = 1;
+      else if (arg === "keep" || arg === "2") targetMode = 2;
+      else if (arg === "give" || arg === "auto" || arg === "3") targetMode = 3;
+      if (targetMode !== null) {
+        setRecoveryCompassMode(targetMode);
+        world2.sendMessage(
+          `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u8A2D\u5B9A\u3092 \xA7e\u300C${getRecoveryCompassModeDescription(targetMode)}\u300D\xA76 \u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+        );
+      } else {
+        const currentMode = getRecoveryCompassMode();
+        primaryPlayer.sendMessage(
+          `\xA76[\u8A2D\u5B9A] \u73FE\u5728\u306E\u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u8A2D\u5B9A: \xA7e${getRecoveryCompassModeDescription(currentMode)}
+\xA77\u4F7F\u7528\u65B9\u6CD5: /scriptevent addon:grave [lost|keep|give]`
         );
       }
       break;
@@ -536,42 +905,34 @@ function handleSettingsScriptEvent(event) {
       let next;
       if (arg === "on" || arg === "true" || arg === "1") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.GRAVE_OTHERS);
+      else next = !isSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS);
+      setSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.GRAVE_OTHERS, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {
         }
-        p.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `\xA76[\u8A2D\u5B9A] \u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
-        );
-      }
+      world2.sendMessage(
+        `\xA76[\u30EF\u30FC\u30EB\u30C9\u8A2D\u5B9A] \u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE \u3092 ${next ? "\xA7a[ON]" : "\xA7c[OFF]"} \xA76\u306B\u5909\u66F4\u3057\u307E\u3057\u305F\u3002`
+      );
       break;
     }
     case "status": {
-      const settings = getPlayerSettings(primaryPlayer);
+      const settings = getPlayerSettings();
+      const compassMode = getRecoveryCompassMode();
       const statusText = (val) => val ? "\xA7a[ON]\xA7r" : "\xA7c[OFF]\xA7r";
       const statusMsg = `\xA7a============================
-\xA76\u3010\u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u8A2D\u5B9A\u3011
+\xA76\u3010\u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u8A2D\u5B9A (\u30EF\u30FC\u30EB\u30C9\u5171\u901A)\u3011
 \xA7f\u30FB\u6728\u306E\u7834\u58CA: ${statusText(settings.tree)}
 \u30FB\u9271\u77F3\u306E\u7834\u58CA: ${statusText(settings.ore)}
 \u30FB\u30AA\u30D5\u30CF\u30F3\u30C9\u305F\u3044\u307E\u3064: ${statusText(settings.torch)}
 \u30FB\u5893\u6A5F\u80FD: ${statusText(settings.grave)}
 \u30FB\u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE: ${statusText(settings.graveOthers)}
-\xA77(/scriptevent addon:menu \u3067\u8A2D\u5B9A\u753B\u9762\u3092\u958B\u304F)
+\u30FB\u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9: \xA7e${getRecoveryCompassModeDescription(compassMode)}\xA7r
+\xA77(\u6728\u306E\u5263\u306E\u9577\u62BC\u3057/\u53F3\u30AF\u30EA\u30C3\u30AF\u3067\u8A2D\u5B9A\u753B\u9762\u3092\u958B\u304F)
 \xA7a============================`;
-      for (const p of targets) {
-        p.sendMessage(statusMsg);
-      }
-      if (isServerSource) {
-        world.sendMessage(statusMsg);
-      }
+      world2.sendMessage(statusMsg);
       break;
     }
     case "help": {
@@ -582,15 +943,16 @@ function handleSettingsScriptEvent(event) {
 \u30FB/scriptevent addon:ore : \u9271\u77F3\u306E\u7834\u58CA\u306EON/OFF\u5207\u308A\u66FF\u3048
 \u30FB/scriptevent addon:torch : \u30AA\u30D5\u30CF\u30F3\u30C9\u305F\u3044\u307E\u3064\u306EON/OFF\u5207\u308A\u66FF\u3048
 \u30FB/scriptevent addon:grave : \u5893\u6A5F\u80FD\u306EON/OFF\u5207\u308A\u66FF\u3048
+\u30FB/scriptevent addon:grave [lost|keep|give] : \u30EA\u30AB\u30D0\u30EA\u30FC\u30B3\u30F3\u30D1\u30B9\u306E\u6271\u3044\u8A2D\u5B9A
 \u30FB/scriptevent addon:grave_others : \u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE\u306EON/OFF\u5207\u308A\u66FF\u3048
 \u30FB/scriptevent addon:status : \u73FE\u5728\u306E\u8A2D\u5B9A\u72B6\u614B\u3092\u78BA\u8A8D
-\xA77\u203B \u6642\u8A08(Clock)\u3092\u6301\u3063\u3066\u753B\u9762\u9577\u62BC\u3057/\u53F3\u30AF\u30EA\u30C3\u30AF\u3067\u3082\u8A2D\u5B9A\u753B\u9762\u304C\u958B\u304D\u307E\u3059\u3002
+\xA77\u203B \u6728\u306E\u5263 (Wooden Sword) \u3092\u6301\u3063\u3066\u753B\u9762\u9577\u62BC\u3057/\u53F3\u30AF\u30EA\u30C3\u30AF\u3067\u8A2D\u5B9A\u753B\u9762\u304C\u958B\u304D\u307E\u3059\u3002
 \xA7a============================`;
       for (const p of targets) {
         p.sendMessage(helpMsg);
       }
       if (isServerSource) {
-        world.sendMessage(helpMsg);
+        world2.sendMessage(helpMsg);
       }
       break;
     }
@@ -598,14 +960,12 @@ function handleSettingsScriptEvent(event) {
 }
 function handleSettingsItemUse(event, cancelCallback) {
   const player = event.source;
-  if (!(player instanceof Player2)) return;
+  if (!(player instanceof Player3)) return;
   const item = event.itemStack;
   if (!item) return;
-  const isClock = item.typeId === "minecraft:clock";
-  const isSneakTool = player.isSneaking && (item.typeId === "minecraft:stick" || item.typeId === "minecraft:feather" || item.typeId === "minecraft:paper");
-  if (isClock || isSneakTool) {
+  if (item.typeId === "minecraft:wooden_sword") {
     cancelCallback();
-    system.run(() => {
+    system2.run(() => {
       showSettingsForm(player);
     });
   }
@@ -801,7 +1161,7 @@ function oreMassDestruction(event, breakableBlockIdSet) {
         durability.damage + destroyPositions.length
       )
     );
-    equippable.setEquipment(EquipmentSlot2.Mainhand, mainhandItem);
+    equippable.setEquipment(EquipmentSlot3.Mainhand, mainhandItem);
   }
 }
 function treeMassDestruction(event) {
@@ -882,16 +1242,16 @@ function treeMassDestruction(event) {
         durability.damage + treeDestroyPositions.length
       )
     );
-    equippable.setEquipment(EquipmentSlot2.Mainhand, mainhandItem);
+    equippable.setEquipment(EquipmentSlot3.Mainhand, mainhandItem);
   }
 }
 
 // src/offhand-touch.ts
 import {
-  world as world2,
-  system as system2,
-  EquipmentSlot as EquipmentSlot3,
-  Player as Player4,
+  world as world3,
+  system as system3,
+  EquipmentSlot as EquipmentSlot4,
+  Player as Player5,
   BlockPermutation,
   Direction
 } from "@minecraft/server";
@@ -915,7 +1275,7 @@ function isAirOrLightBlock(typeId) {
 function getOffhandTorchLightLevel(player) {
   const equippable = player.getComponent("minecraft:equippable");
   if (!equippable) return null;
-  const offhandItem = equippable.getEquipment(EquipmentSlot3.Offhand);
+  const offhandItem = equippable.getEquipment(EquipmentSlot4.Offhand);
   if (!offhandItem) return null;
   const level = TORCH_LIGHT_LEVELS[offhandItem.typeId];
   if (level === void 0) return null;
@@ -947,7 +1307,7 @@ function clearPreviousLight(playerId) {
   const previous = activeLights.get(playerId);
   if (!previous) return;
   try {
-    const dimension = world2.getDimension(previous.dimensionId);
+    const dimension = world3.getDimension(previous.dimensionId);
     for (const position of previous.locations) {
       removeLight(dimension, position);
     }
@@ -998,8 +1358,8 @@ function getLookAtBlock(player, maxDistance = 10) {
     return dimension.getBlock(targetLocation);
   }
 }
-system2.runInterval(() => {
-  for (const player of world2.getAllPlayers()) {
+system3.runInterval(() => {
+  for (const player of world3.getAllPlayers()) {
     const playerId = player.id;
     if (!player.isValid || !playerId) {
       clearPreviousLight(playerId);
@@ -1078,15 +1438,15 @@ system2.runInterval(() => {
     });
   }
 }, 2);
-world2.afterEvents.entityDie.subscribe((event) => {
-  if (event.deadEntity instanceof Player4) {
+world3.afterEvents.entityDie.subscribe((event) => {
+  if (event.deadEntity instanceof Player5) {
     clearPreviousLight(event.deadEntity.id);
   }
 });
-world2.afterEvents.playerDimensionChange.subscribe((event) => {
+world3.afterEvents.playerDimensionChange.subscribe((event) => {
   clearPreviousLight(event.player.id);
 });
-world2.afterEvents.playerLeave.subscribe((event) => {
+world3.afterEvents.playerLeave.subscribe((event) => {
   clearPreviousLight(event.playerId);
 });
 function handleTorchSwap(player, cancelCallback) {
@@ -1094,259 +1454,27 @@ function handleTorchSwap(player, cancelCallback) {
   if (!player.isSneaking) return;
   const equippable = player.getComponent("minecraft:equippable");
   if (!equippable) return;
-  const mainhandItem = equippable.getEquipment(EquipmentSlot3.Mainhand);
-  const offhandItem = equippable.getEquipment(EquipmentSlot3.Offhand);
+  const mainhandItem = equippable.getEquipment(EquipmentSlot4.Mainhand);
+  const offhandItem = equippable.getEquipment(EquipmentSlot4.Offhand);
   if (mainhandItem && mainhandItem.typeId in TORCH_LIGHT_LEVELS && !offhandItem) {
     cancelCallback();
-    system2.run(() => {
+    system3.run(() => {
       player.runCommand(
         `replaceitem entity @s slot.weapon.offhand 0 ${mainhandItem.typeId} ${mainhandItem.amount}`
       );
-      equippable.setEquipment(EquipmentSlot3.Mainhand, void 0);
+      equippable.setEquipment(EquipmentSlot4.Mainhand, void 0);
     });
     return;
   }
   if (!mainhandItem && offhandItem && offhandItem.typeId in TORCH_LIGHT_LEVELS) {
     cancelCallback();
-    system2.run(() => {
+    system3.run(() => {
       player.runCommand(
         `replaceitem entity @s slot.weapon.mainhand 0 ${offhandItem.typeId} ${offhandItem.amount}`
       );
       player.runCommand(`replaceitem entity @s slot.weapon.offhand 0 air`);
     });
     return;
-  }
-}
-
-// src/grave.ts
-import {
-  world as world3,
-  system as system3,
-  EquipmentSlot as EquipmentSlot4,
-  EntityComponentTypes,
-  BlockComponentTypes,
-  Player as Player5
-} from "@minecraft/server";
-function handleGraveEntityDie(event) {
-  const deadEntity = event.deadEntity;
-  if (!(deadEntity instanceof Player5)) return;
-  const player = deadEntity;
-  if (!isSettingEnabled(player, SETTING_KEYS.GRAVE)) {
-    return;
-  }
-  const dimension = player.dimension;
-  const playerName = player.nameTag || player.id || "Player";
-  const playerId = player.id;
-  const basePos = {
-    x: Math.floor(player.location.x),
-    y: Math.max(Math.floor(player.location.y), dimension.heightRange.min),
-    z: Math.floor(player.location.z)
-  };
-  const items = [];
-  const invComp = player.getComponent(EntityComponentTypes.Inventory);
-  const inv = invComp?.container;
-  if (inv) {
-    for (let i = 0; i < inv.size; i++) {
-      const item = inv.getItem(i);
-      if (item) {
-        items.push(item.clone());
-      }
-    }
-  }
-  const equippable = player.getComponent(EntityComponentTypes.Equippable);
-  const slots = [
-    EquipmentSlot4.Head,
-    EquipmentSlot4.Chest,
-    EquipmentSlot4.Legs,
-    EquipmentSlot4.Feet,
-    EquipmentSlot4.Offhand
-  ];
-  if (equippable) {
-    for (const slot of slots) {
-      const item = equippable.getEquipment(slot);
-      if (item) {
-        items.push(item.clone());
-      }
-    }
-  }
-  if (items.length === 0) return;
-  system3.run(() => {
-    try {
-      let targetMinY = dimension.heightRange.min + 1;
-      while (targetMinY < dimension.heightRange.min + 20) {
-        const b1 = dimension.getBlock({
-          x: basePos.x,
-          y: targetMinY,
-          z: basePos.z
-        });
-        if (b1 && b1.typeId !== "minecraft:chest") {
-          break;
-        }
-        targetMinY++;
-      }
-      const hidePos1 = { x: basePos.x, y: targetMinY, z: basePos.z };
-      const hidePos2 = {
-        x: basePos.x + 1,
-        y: targetMinY,
-        z: basePos.z
-      };
-      const hideBlock1 = dimension.getBlock(hidePos1);
-      const hideBlock2 = dimension.getBlock(hidePos2);
-      if (!hideBlock1 || !hideBlock2) return;
-      const origType1 = hideBlock1.typeId;
-      const origType2 = hideBlock2.typeId;
-      hideBlock1.setType("minecraft:chest");
-      hideBlock2.setType("minecraft:chest");
-      const c1Comp = hideBlock1.getComponent(BlockComponentTypes.Inventory);
-      const c2Comp = hideBlock2.getComponent(BlockComponentTypes.Inventory);
-      const c1 = c1Comp?.container;
-      const c2 = c2Comp?.container;
-      let itemIdx = 0;
-      if (c1) {
-        for (let i = 0; i < c1.size && itemIdx < items.length; i++) {
-          c1.setItem(i, items[itemIdx++]);
-        }
-      }
-      if (c2 && itemIdx < items.length) {
-        for (let i = 0; i < c2.size && itemIdx < items.length; i++) {
-          c2.setItem(i, items[itemIdx++]);
-        }
-      }
-      if (inv) {
-        for (let i = 0; i < inv.size; i++) {
-          const item = inv.getItem(i);
-          if (item) {
-            inv.setItem(i, void 0);
-          }
-        }
-      }
-      if (equippable) {
-        for (const slot of slots) {
-          const item = equippable.getEquipment(slot);
-          if (item) {
-            equippable.setEquipment(slot, void 0);
-          }
-        }
-      }
-      let targetGraveBlock = dimension.getBlock(basePos);
-      let origGroundType = "minecraft:air";
-      const groundBlock0 = dimension.getBlock(basePos);
-      const groundBlock1 = dimension.getBlock({
-        x: basePos.x,
-        y: Math.min(basePos.y + 1, dimension.heightRange.max),
-        z: basePos.z
-      });
-      if (groundBlock0 && groundBlock0.isAir) {
-        targetGraveBlock = groundBlock0;
-        origGroundType = "minecraft:air";
-      } else if (groundBlock1 && groundBlock1.isAir) {
-        targetGraveBlock = groundBlock1;
-        origGroundType = "minecraft:air";
-      } else if (groundBlock0) {
-        targetGraveBlock = groundBlock0;
-        origGroundType = groundBlock0.typeId;
-      }
-      if (targetGraveBlock) {
-        const finalPos = targetGraveBlock.location;
-        targetGraveBlock.setType("minecraft:bedrock");
-        const graveKey = `grave_${finalPos.x}_${finalPos.y}_${finalPos.z}`;
-        const graveData = {
-          ownerId: playerId,
-          ownerName: playerName,
-          dimensionId: dimension.id,
-          allowOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
-          hideX: hidePos1.x,
-          hideY: targetMinY,
-          hideZ: hidePos1.z,
-          origType1,
-          origType2,
-          origGroundType
-        };
-        world3.setDynamicProperty(graveKey, JSON.stringify(graveData));
-        world3.sendMessage(
-          `\xA7c${playerName} \u306E\u5893\u304C\u751F\u6210\u3055\u308C\u307E\u3057\u305F [X: ${finalPos.x}, Y: ${finalPos.y}, Z: ${finalPos.z}]`
-        );
-      }
-    } catch (e) {
-      console.error("\u5893\u751F\u6210\u30A8\u30E9\u30FC: " + e);
-    }
-  });
-}
-function handleGraveBeforeInteract(event) {
-  const block = event.block;
-  const player = event.player;
-  const dimension = block.dimension;
-  const graveKey = `grave_${block.location.x}_${block.location.y}_${block.location.z}`;
-  const rawData = world3.getDynamicProperty(graveKey);
-  if (typeof rawData !== "string") return;
-  event.cancel = true;
-  const data = JSON.parse(rawData);
-  if (data.ownerId !== player.id) {
-    const ownerAllows = data.allowOthers !== false;
-    const playerAllows = isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS);
-    if (!ownerAllows || !playerAllows) {
-      player.sendMessage(
-        `\xA7c\u3053\u308C\u306F ${data.ownerName} \u306E\u5893\u3067\u3059\uFF01\uFF08\u4ED6\u4EBA\u306E\u5893\u306E\u56DE\u53CE\u306F\u7121\u52B9\u5316\u3055\u308C\u3066\u3044\u307E\u3059\uFF09`
-      );
-      return;
-    }
-  }
-  system3.run(() => {
-    try {
-      const hideBlock1 = dimension.getBlock({
-        x: data.hideX,
-        y: data.hideY,
-        z: data.hideZ
-      });
-      const hideBlock2 = dimension.getBlock({
-        x: data.hideX + 1,
-        y: data.hideY,
-        z: data.hideZ
-      });
-      for (const hideBlock of [hideBlock1, hideBlock2]) {
-        if (hideBlock) {
-          const comp = hideBlock.getComponent(BlockComponentTypes.Inventory);
-          const container = comp?.container;
-          if (container) {
-            for (let i = 0; i < container.size; i++) {
-              const item = container.getItem(i);
-              if (item) {
-                dimension.spawnItem(item, {
-                  x: block.location.x + 0.5,
-                  y: block.location.y + 1,
-                  z: block.location.z + 0.5
-                });
-                container.setItem(i, void 0);
-              }
-            }
-          }
-        }
-      }
-      if (hideBlock1) hideBlock1.setType(data.origType1);
-      if (hideBlock2) hideBlock2.setType(data.origType2);
-      block.setType(data.origGroundType || "minecraft:air");
-      world3.setDynamicProperty(graveKey, void 0);
-      if (data.ownerId !== player.id) {
-        player.sendMessage(
-          `\xA7a${data.ownerName} \u306E\u5893\u304B\u3089\u3059\u3079\u3066\u306E\u30A2\u30A4\u30C6\u30E0\u3092\u56DE\u53CE\u3057\u307E\u3057\u305F\uFF01`
-        );
-      } else {
-        player.sendMessage(`\xA7a\u5893\u304B\u3089\u3059\u3079\u3066\u306E\u30A2\u30A4\u30C6\u30E0\u3092\u56DE\u53CE\u3057\u307E\u3057\u305F\uFF01`);
-      }
-    } catch (e) {
-      console.error("\u5893\u56DE\u53CE\u30A8\u30E9\u30FC: " + e);
-    }
-  });
-}
-function handleGraveBeforeBreak(event) {
-  const block = event.block;
-  const graveKey = `grave_${block.location.x}_${block.location.y}_${block.location.z}`;
-  const rawData = world3.getDynamicProperty(graveKey);
-  if (typeof rawData === "string") {
-    event.cancel = true;
-    event.player.sendMessage(
-      `\xA7e\u5893\u77F3\u306F\u58CA\u305B\u307E\u305B\u3093\u3002\u53F3\u30AF\u30EA\u30C3\u30AF\u3067\u56DE\u53CE\u3057\u3066\u304F\u3060\u3055\u3044\u3002`
-    );
   }
 }
 
@@ -2070,9 +2198,13 @@ function checkAndAutoDeleteDeathWaypoint(player) {
         }
         const displayName = getWaypointDisplayName(wp);
         try {
-          player.sendMessage(`\xA7a[Waypoint] ${displayName} \u306B\u5230\u9054\u3057\u305F\u305F\u3081\u3001\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
+          player.sendMessage(
+            `\xA7a[Waypoint] ${displayName} \u306B\u5230\u9054\u3057\u305F\u305F\u3081\u3001\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u3092\u524A\u9664\u3057\u307E\u3057\u305F`
+          );
           if (hasRecoveryCompassInInventory(player)) {
-            player.onScreenDisplay.setActionBar(`\xA7a[Waypoint] ${displayName} \u306B\u5230\u9054\u3057\u305F\u305F\u3081\u3001\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
+            player.onScreenDisplay.setActionBar(
+              `\xA7a[Waypoint] ${displayName} \u306B\u5230\u9054\u3057\u305F\u305F\u3081\u3001\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u3092\u524A\u9664\u3057\u307E\u3057\u305F`
+            );
             player.playSound("random.orb", { pitch: 1.2, volume: 1 });
           }
         } catch {
@@ -2133,7 +2265,7 @@ function formatWaypointHUDText(player, waypoint, actionTag = "", isZoomed) {
   const displayName = getWaypointDisplayName(waypoint);
   const arrow = getRelative8DirectionArrow(player, waypoint.pos);
   const isDeathShiftWithRecovery = waypoint.source === "death" && player.isSneaking && isPlayerHoldingRecoveryCompass(player);
-  const timePart = isDeathShiftWithRecovery ? `\xA77${formatWaypointElapsedTime(waypoint.createdAt)} ` : "";
+  const timePart = isDeathShiftWithRecovery ? `\xA77${formatWaypointElapsedTime(waypoint.createdAt)}\u524D ` : "";
   const tagPart = actionTag ? `${actionTag} ` : "";
   return `${zoomPrefix}${tagPart}\xA7e${displayName} ${timePart}\xA7f${dist}m \xA7b${arrow}`;
 }
@@ -2259,14 +2391,23 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
     if (currentTick - state.lastPinToggleTick < PIN_TOGGLE_COOLDOWN_TICKS) {
       return;
     }
-    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+    const closestHit = findRayClosestWaypoint(
+      virtHead,
+      viewDir,
+      player.dimension.id,
+      player
+    );
     if (closestHit) {
       state.lastPinToggleTick = currentTick;
       const key = getWaypointKey2(closestHit.waypoint);
       const hitDisplayName = getWaypointDisplayName(closestHit.waypoint);
       if (state.pinnedWaypointKey === key) {
         state.pinnedWaypointKey = null;
-        showWaypointOperationNotice(player, closestHit.waypoint, "\xA77[\u56FA\u5B9A\u89E3\u9664]");
+        showWaypointOperationNotice(
+          player,
+          closestHit.waypoint,
+          "\xA77[\u56FA\u5B9A\u89E3\u9664]"
+        );
         system4.run(() => {
           try {
             if (player && player.isValid) {
@@ -2437,7 +2578,12 @@ function handleCompassLeftClick(player, itemStack) {
       return;
     }
   }
-  const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+  const closestHit = findRayClosestWaypoint(
+    virtHead,
+    viewDir,
+    player.dimension.id,
+    player
+  );
   if (!closestHit) {
     state.remoteHideTargetKey = null;
     state.remoteHideClickTick = 0;
@@ -2552,7 +2698,12 @@ function updatePlayerVirtualNavHUD(player) {
       activeWaypoint = nearbyTarget.waypoint;
       isPinnedActive = pinnedWp !== null && getWaypointKey2(activeWaypoint) === state.pinnedWaypointKey;
     } else if (player.isSneaking) {
-      const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+      const closestHit = findRayClosestWaypoint(
+        virtHead,
+        viewDir,
+        player.dimension.id,
+        player
+      );
       if (closestHit) {
         activeWaypoint = closestHit.waypoint;
         isPinnedActive = pinnedWp !== null && getWaypointKey2(activeWaypoint) === state.pinnedWaypointKey;
@@ -2579,7 +2730,12 @@ function updatePlayerVirtualNavHUD(player) {
     state.wasShowingHUD = true;
   } else if (activeWaypoint) {
     const actionTag = isPinnedActive && isHolding ? "\xA76[\u56FA\u5B9A]" : "";
-    const text = formatWaypointHUDText(player, activeWaypoint, actionTag, isZoomed);
+    const text = formatWaypointHUDText(
+      player,
+      activeWaypoint,
+      actionTag,
+      isZoomed
+    );
     try {
       player.onScreenDisplay.setActionBar(text);
       state.wasShowingHUD = true;
@@ -2638,9 +2794,13 @@ function handleSilkTouchWaypointDelete(player, itemStack, cancelCallback) {
   const deletedDisplayName = getWaypointDisplayName(targetWp);
   try {
     player.sendMessage(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
-    player.onScreenDisplay.setActionBar(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
+    player.onScreenDisplay.setActionBar(
+      `\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`
+    );
     if (targetWp.source !== "death") {
-      world6.sendMessage(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`);
+      world6.sendMessage(
+        `\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`
+      );
     }
   } catch {
   }
@@ -3184,6 +3344,22 @@ system6.afterEvents.scriptEventReceive.subscribe((event) => {
     handleSettingsScriptEvent(event);
   } catch (error) {
     console.error("\u30A4\u30D9\u30F3\u30C8\u51E6\u7406\u30A8\u30E9\u30FC:", error);
+  }
+});
+world10.afterEvents.playerSpawn.subscribe((event) => {
+  const player = event.player;
+  if (!player) return;
+  handleGravePlayerSpawn(player);
+  if (event.initialSpawn) {
+    system6.run(() => {
+      try {
+        player.sendMessage(
+          `\xA76[Mining & Utility Addon] \xA7a\u30ED\u30FC\u30C9\u5B8C\u4E86
+\xA77\u203B \u6728\u306E\u5263 (Wooden Sword) \u3092\u6301\u3063\u3066\u753B\u9762\u9577\u62BC\u3057(\u53F3\u30AF\u30EA\u30C3\u30AF)\u3067\u8A2D\u5B9A\u753B\u9762\u304C\u958B\u304D\u307E\u3059\u3002`
+        );
+      } catch {
+      }
+    });
   }
 });
 export {

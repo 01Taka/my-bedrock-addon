@@ -6,6 +6,12 @@ import {
   ItemUseBeforeEvent,
 } from "@minecraft/server";
 import { ModalFormData } from "@minecraft/server-ui";
+import {
+  getRecoveryCompassMode,
+  setRecoveryCompassMode,
+  getRecoveryCompassModeDescription,
+  RecoveryCompassMode,
+} from "./grave";
 
 export const SETTING_KEYS = {
   TREE: "setting_tree",
@@ -26,67 +32,56 @@ export interface PlayerSettings {
 }
 
 // メモリ内フォールバック（DynamicPropertyが取得・保存できない環境用の安全対策）
-const memorySettingsFallback = new Map<string, Map<string, boolean>>();
-
-function getPlayerMemoryMap(player: Player): Map<string, boolean> {
-  const key = player.id || player.name || "default";
-  let map = memorySettingsFallback.get(key);
-  if (!map) {
-    map = new Map<string, boolean>();
-    memorySettingsFallback.set(key, map);
-  }
-  return map;
-}
+const worldMemorySettings = new Map<string, boolean>();
 
 /**
- * プレイヤーの特定の設定値を取得（未設定時はデフォルト true）
+ * ワールド共通の設定値を取得（未設定時はデフォルト true）
  */
 export function isSettingEnabled(
-  player: Player,
-  key: SettingKey,
+  _player?: Player | null,
+  key: SettingKey = SETTING_KEYS.GRAVE,
   defaultValue: boolean = true,
 ): boolean {
   try {
-    const val = player.getDynamicProperty(key);
+    const val = world.getDynamicProperty(key);
     if (typeof val === "boolean") {
       return val;
     }
   } catch (e) {
     // 取得失敗時はフォールバック参照
   }
-  const memMap = getPlayerMemoryMap(player);
-  if (memMap.has(key)) {
-    return memMap.get(key)!;
+  if (worldMemorySettings.has(key)) {
+    return worldMemorySettings.get(key)!;
   }
   return defaultValue;
 }
 
 /**
- * プレイヤーの設定値を保存
+ * ワールド共通の設定値を保存
  */
 export function setSettingEnabled(
-  player: Player,
+  _player: Player | null,
   key: SettingKey,
   enabled: boolean,
 ): void {
   try {
-    player.setDynamicProperty(key, enabled);
+    world.setDynamicProperty(key, enabled);
   } catch (e) {
     console.error(`設定保存エラー [${key}]:`, e);
   }
-  getPlayerMemoryMap(player).set(key, enabled);
+  worldMemorySettings.set(key, enabled);
 }
 
 /**
- * プレイヤーの全設定を取得
+ * ワールド全体の全設定を取得
  */
-export function getPlayerSettings(player: Player): PlayerSettings {
+export function getPlayerSettings(_player?: Player | null): PlayerSettings {
   return {
-    tree: isSettingEnabled(player, SETTING_KEYS.TREE),
-    ore: isSettingEnabled(player, SETTING_KEYS.ORE),
-    torch: isSettingEnabled(player, SETTING_KEYS.TORCH),
-    grave: isSettingEnabled(player, SETTING_KEYS.GRAVE),
-    graveOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
+    tree: isSettingEnabled(null, SETTING_KEYS.TREE),
+    ore: isSettingEnabled(null, SETTING_KEYS.ORE),
+    torch: isSettingEnabled(null, SETTING_KEYS.TORCH),
+    grave: isSettingEnabled(null, SETTING_KEYS.GRAVE),
+    graveOthers: isSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS),
   };
 }
 
@@ -95,9 +90,10 @@ export function getPlayerSettings(player: Player): PlayerSettings {
  */
 export function showSettingsForm(player: Player): void {
   const current = getPlayerSettings(player);
+  const currentCompassMode = getRecoveryCompassMode();
 
   const form = new ModalFormData();
-  form.title("§l§6採掘・墓・たいまつ設定");
+  form.title("§l§6採掘・墓・たいまつ設定 (ワールド共通)");
   form.toggle("木の破壊 (一括伐採)", { defaultValue: current.tree });
   form.toggle("鉱石の破壊 (一括採掘)", { defaultValue: current.ore });
   form.toggle("オフハンドたいまつ (動的光源・持ち替え)", {
@@ -107,6 +103,15 @@ export function showSettingsForm(player: Player): void {
   form.toggle("他人の墓の回収 (他人の墓石を開ける)", {
     defaultValue: current.graveOthers,
   });
+  form.dropdown(
+    "リカバリーコンパスの扱い",
+    [
+      "lost: 墓の中に含める (デフォルト)",
+      "keep: インベントリ内にキープ",
+      "give: キープ＋未所持なら自動付与",
+    ],
+    { defaultValueIndex: currentCompassMode - 1 },
+  );
 
   form
     .show(player)
@@ -119,31 +124,43 @@ export function showSettingsForm(player: Player): void {
         torchVal,
         graveVal,
         graveOthersVal,
+        compassIndex,
       ] = response.formValues as [
         boolean,
         boolean,
         boolean,
         boolean,
         boolean,
+        number,
       ];
 
-      setSettingEnabled(player, SETTING_KEYS.TREE, treeVal);
-      setSettingEnabled(player, SETTING_KEYS.ORE, oreVal);
-      setSettingEnabled(player, SETTING_KEYS.TORCH, torchVal);
-      setSettingEnabled(player, SETTING_KEYS.GRAVE, graveVal);
-      setSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS, graveOthersVal);
+      setSettingEnabled(null, SETTING_KEYS.TREE, treeVal);
+      setSettingEnabled(null, SETTING_KEYS.ORE, oreVal);
+      setSettingEnabled(null, SETTING_KEYS.TORCH, torchVal);
+      setSettingEnabled(null, SETTING_KEYS.GRAVE, graveVal);
+      setSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS, graveOthersVal);
       world.gameRules.keepInventory = graveVal;
+
+      let compassMsg = "";
+      if (typeof compassIndex === "number") {
+        const newCompassMode = (compassIndex + 1) as RecoveryCompassMode;
+        if (newCompassMode !== currentCompassMode) {
+          setRecoveryCompassMode(newCompassMode);
+        }
+        compassMsg = `・リカバリーコンパス: §e${getRecoveryCompassModeDescription(newCompassMode)}§f\n`;
+      }
 
       const statusText = (val: boolean) => (val ? "§a[ON]§r" : "§c[OFF]§r");
 
-      player.sendMessage(
+      world.sendMessage(
         `§a============================\n` +
-          `§6【アドオン設定を更新しました】\n` +
+          `§6【ワールド共通設定を更新しました】 (変更者: ${player.name})\n` +
           `§f・木の破壊: ${statusText(treeVal)}\n` +
           `・鉱石の破壊: ${statusText(oreVal)}\n` +
           `・オフハンドたいまつ: ${statusText(torchVal)}\n` +
           `・墓機能: ${statusText(graveVal)}\n` +
           `・他人の墓の回収: ${statusText(graveOthersVal)}\n` +
+          compassMsg +
           `§a============================`,
       );
     })
@@ -235,22 +252,17 @@ export function handleSettingsScriptEvent(
       let next: boolean;
       if (arg === "on" || arg === "true" || arg === "1") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.TREE);
+      else next = !isSettingEnabled(null, SETTING_KEYS.TREE);
 
+      setSettingEnabled(null, SETTING_KEYS.TREE, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.TREE, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {}
-        p.sendMessage(
-          `§6[設定] 木の破壊 (一括伐採) を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `§6[設定] 木の破壊 (一括伐採) を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
-      }
+      world.sendMessage(
+        `§6[ワールド設定] 木の破壊 (一括伐採) を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+      );
       break;
     }
 
@@ -258,22 +270,17 @@ export function handleSettingsScriptEvent(
       let next: boolean;
       if (arg === "on" || arg === "true" || arg === "1") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.ORE);
+      else next = !isSettingEnabled(null, SETTING_KEYS.ORE);
 
+      setSettingEnabled(null, SETTING_KEYS.ORE, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.ORE, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {}
-        p.sendMessage(
-          `§6[設定] 鉱石の破壊 (一括採掘) を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `§6[設定] 鉱石の破壊 (一括採掘) を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
-      }
+      world.sendMessage(
+        `§6[ワールド設定] 鉱石の破壊 (一括採掘) を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+      );
       break;
     }
 
@@ -281,44 +288,77 @@ export function handleSettingsScriptEvent(
       let next: boolean;
       if (arg === "on" || arg === "true" || arg === "1") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.TORCH);
+      else next = !isSettingEnabled(null, SETTING_KEYS.TORCH);
 
+      setSettingEnabled(null, SETTING_KEYS.TORCH, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.TORCH, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {}
-        p.sendMessage(
-          `§6[設定] オフハンドたいまつ を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `§6[設定] オフハンドたいまつ を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
-      }
+      world.sendMessage(
+        `§6[ワールド設定] オフハンドたいまつ を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+      );
       break;
     }
 
     case "grave": {
+      if (arg === "lost" || arg === "1" || arg === "all") {
+        setRecoveryCompassMode(1);
+        world.sendMessage(
+          `§6[ワールド設定] リカバリーコンパス設定を §e「${getRecoveryCompassModeDescription(1)}」§6 に変更しました。`,
+        );
+        break;
+      }
+      if (arg === "keep" || arg === "2") {
+        setRecoveryCompassMode(2);
+        world.sendMessage(
+          `§6[ワールド設定] リカバリーコンパス設定を §e「${getRecoveryCompassModeDescription(2)}」§6 に変更しました。`,
+        );
+        break;
+      }
+      if (arg === "give" || arg === "auto" || arg === "3") {
+        setRecoveryCompassMode(3);
+        world.sendMessage(
+          `§6[ワールド設定] リカバリーコンパス設定を §e「${getRecoveryCompassModeDescription(3)}」§6 に変更しました。`,
+        );
+        break;
+      }
+
       let next: boolean;
-      if (arg === "on" || arg === "true" || arg === "1") next = true;
+      if (arg === "on" || arg === "true") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.GRAVE);
+      else next = !isSettingEnabled(null, SETTING_KEYS.GRAVE);
 
       world.gameRules.keepInventory = next;
+      setSettingEnabled(null, SETTING_KEYS.GRAVE, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.GRAVE, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {}
-        p.sendMessage(
-          `§6[設定] 墓機能 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
       }
-      if (isServerSource) {
+      world.sendMessage(
+        `§6[ワールド設定] 墓機能 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+      );
+      break;
+    }
+
+    case "compass": {
+      let targetMode: RecoveryCompassMode | null = null;
+      if (arg === "lost" || arg === "1" || arg === "all") targetMode = 1;
+      else if (arg === "keep" || arg === "2") targetMode = 2;
+      else if (arg === "give" || arg === "auto" || arg === "3") targetMode = 3;
+
+      if (targetMode !== null) {
+        setRecoveryCompassMode(targetMode);
         world.sendMessage(
-          `§6[設定] 墓機能 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+          `§6[ワールド設定] リカバリーコンパス設定を §e「${getRecoveryCompassModeDescription(targetMode)}」§6 に変更しました。`,
+        );
+      } else {
+        const currentMode = getRecoveryCompassMode();
+        primaryPlayer.sendMessage(
+          `§6[設定] 現在のリカバリーコンパス設定: §e${getRecoveryCompassModeDescription(currentMode)}\n` +
+            `§7使用方法: /scriptevent addon:grave [lost|keep|give]`,
         );
       }
       break;
@@ -329,44 +369,36 @@ export function handleSettingsScriptEvent(
       let next: boolean;
       if (arg === "on" || arg === "true" || arg === "1") next = true;
       else if (arg === "off" || arg === "false" || arg === "0") next = false;
-      else next = !isSettingEnabled(primaryPlayer, SETTING_KEYS.GRAVE_OTHERS);
+      else next = !isSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS);
 
+      setSettingEnabled(null, SETTING_KEYS.GRAVE_OTHERS, next);
       for (const p of targets) {
-        setSettingEnabled(p, SETTING_KEYS.GRAVE_OTHERS, next);
         try {
           p.playSound(next ? "random.orb" : "random.break", { pitch: 1.2, volume: 0.8 });
         } catch {}
-        p.sendMessage(
-          `§6[設定] 他人の墓の回収 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
       }
-      if (isServerSource) {
-        world.sendMessage(
-          `§6[設定] 他人の墓の回収 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
-        );
-      }
+      world.sendMessage(
+        `§6[ワールド設定] 他人の墓の回収 を ${next ? "§a[ON]" : "§c[OFF]"} §6に変更しました。`,
+      );
       break;
     }
 
     case "status": {
-      const settings = getPlayerSettings(primaryPlayer);
+      const settings = getPlayerSettings();
+      const compassMode = getRecoveryCompassMode();
       const statusText = (val: boolean) => (val ? "§a[ON]§r" : "§c[OFF]§r");
       const statusMsg =
         `§a============================\n` +
-        `§6【採掘・墓・たいまつ設定】\n` +
+        `§6【採掘・墓・たいまつ設定 (ワールド共通)】\n` +
         `§f・木の破壊: ${statusText(settings.tree)}\n` +
         `・鉱石の破壊: ${statusText(settings.ore)}\n` +
         `・オフハンドたいまつ: ${statusText(settings.torch)}\n` +
         `・墓機能: ${statusText(settings.grave)}\n` +
         `・他人の墓の回収: ${statusText(settings.graveOthers)}\n` +
-        `§7(/scriptevent addon:menu で設定画面を開く)\n` +
+        `・リカバリーコンパス: §e${getRecoveryCompassModeDescription(compassMode)}§r\n` +
+        `§7(木の剣の長押し/右クリックで設定画面を開く)\n` +
         `§a============================`;
-      for (const p of targets) {
-        p.sendMessage(statusMsg);
-      }
-      if (isServerSource) {
-        world.sendMessage(statusMsg);
-      }
+      world.sendMessage(statusMsg);
       break;
     }
 
@@ -379,9 +411,10 @@ export function handleSettingsScriptEvent(
         `・/scriptevent addon:ore : 鉱石の破壊のON/OFF切り替え\n` +
         `・/scriptevent addon:torch : オフハンドたいまつのON/OFF切り替え\n` +
         `・/scriptevent addon:grave : 墓機能のON/OFF切り替え\n` +
+        `・/scriptevent addon:grave [lost|keep|give] : リカバリーコンパスの扱い設定\n` +
         `・/scriptevent addon:grave_others : 他人の墓の回収のON/OFF切り替え\n` +
         `・/scriptevent addon:status : 現在の設定状態を確認\n` +
-        `§7※ 時計(Clock)を持って画面長押し/右クリックでも設定画面が開きます。\n` +
+        `§7※ 木の剣 (Wooden Sword) を持って画面長押し/右クリックで設定画面が開きます。\n` +
         `§a============================`;
       for (const p of targets) {
         p.sendMessage(helpMsg);
@@ -395,7 +428,7 @@ export function handleSettingsScriptEvent(
 }
 
 /**
- * スニーク中に特定のアイテム（棒や時計など）を使用した際に設定UIを開くハンドラー
+ * 設定用アイテム（木の剣）使用時の設定UI表示ハンドラー
  */
 export function handleSettingsItemUse(
   event: ItemUseBeforeEvent,
@@ -407,15 +440,8 @@ export function handleSettingsItemUse(
   const item = event.itemStack;
   if (!item) return;
 
-  const isClock = item.typeId === "minecraft:clock";
-
-  const isSneakTool =
-    player.isSneaking &&
-    (item.typeId === "minecraft:stick" ||
-      item.typeId === "minecraft:feather" ||
-      item.typeId === "minecraft:paper");
-
-  if (isClock || isSneakTool) {
+  // 設定用アイテム: 木の剣 (長押し / 右クリックで設定画面を開く)
+  if (item.typeId === "minecraft:wooden_sword") {
     cancelCallback();
     system.run(() => {
       showSettingsForm(player);

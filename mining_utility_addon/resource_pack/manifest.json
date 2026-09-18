@@ -1,13 +1,13 @@
 {
   "format_version": 2,
   "header": {
-    "name": "Mining & Utility Addon RP v108",
+    "name": "Mining & Utility Addon RP v112",
     "description": "Resource Pack for Mining & Utility Addon",
     "uuid": "e61408b8-9382-446d-a73b-ea69c78f9121",
     "version": [
       1,
       0,
-      108
+      112
     ],
     "min_engine_version": [
       1,
@@ -23,7 +23,7 @@
       "version": [
         1,
         0,
-        108
+        112
       ]
     }
   ]
