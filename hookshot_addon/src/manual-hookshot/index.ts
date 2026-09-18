@@ -51,6 +51,8 @@ interface PlayerHookState {
   isAuto: boolean;
   /** パラシュート付きフックショットかどうか */
   hasParachute: boolean;
+  /** 前回SEを再生したピルチャージ数（0〜3） */
+  lastChargedPillCount: number;
 }
 
 /** プレイヤーIDをキーにしたフック状態マップ */
@@ -58,12 +60,6 @@ const playerHooks = new Map<string, PlayerHookState>();
 
 /** プレイヤーIDをキーにした前回巻き取り開始時爆風エフェクト発生tickマップ */
 const lastWindStartEffectTickMap = new Map<string, number>();
-
-/** 前回ピルHUDを表示したプレイヤーIDのセット（非表示時のアクションバー消去用） */
-const playersWithPillHud = new Set<string>();
-
-/** 照準判定（未着弾時の空ピル色）のキャッシュ（マルチプレイ時の毎tickレイキャスト負荷軽減用） */
-const targetAimCache = new Map<string, { canHit: boolean; lastCheckTick: number }>();
 
 /**
  * プレイヤーがフックショット（手動または自動）を所持（メインハンドまたはオフハンド）しているか判定
@@ -117,89 +113,14 @@ export function isReleaseBlastReady(player: Player): boolean {
 }
 
 /**
- * アクションバーにピルの蓄積状況を示すテキストなしピルUIを表示
- * （手に持っておらず、フックも刺さっていない場合はHUDをクリア）
+ * アクションバーHUDの残存表示をクリア
  */
-export function updateManualHookshotHud(player: Player): void {
-  if (!player.isValid) return;
-
-  const shouldShow = isHoldingManualHookshot(player) || playerHooks.has(player.id);
-
-  if (shouldShow) {
-    playersWithPillHud.add(player.id);
-    const hook = playerHooks.get(player.id);
-
-    // 1. 着弾中で、まだ最初の巻き取りが開始されていない場合:
-    //    オレンジ色(§6)で「着弾完了・巻き取り開始時の衝撃吸収ブレーキ待機中」を表示
-    if (hook && !hook.hasStartedWinding) {
-      player.onScreenDisplay.setActionBar("§6(▰▰▰)");
-      return;
-    }
-
-    // 2. 巻き取り開始後、または未着弾時（構えている状態）のHUD表示
-    const pills = getChargedPillCount(player);
-    const maxPills = MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
-    // 着地中で実際には爆発とインパルスが発生しない場合はグレーっぽい薄緑(§2)、空中で発動可能な場合は鮮やかな緑(§a)
-    const activeColor = player.isOnGround ? "§2" : "§a";
-
-    // 射程内で壁または大型モブに着弾可能か判定（未着弾時の空ピル色用）
-    // サーバー負荷軽減のため 4 tick (約0.2秒) ごとにキャッシュ更新
-    let canHitTarget = false;
-    if (!hook) {
-      const cached = targetAimCache.get(player.id);
-      if (cached && system.currentTick - cached.lastCheckTick < 4) {
-        canHitTarget = cached.canHit;
-      } else {
-        try {
-          const entityHits = player.getEntitiesFromViewDirection({
-            maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-          });
-          for (const hit of entityHits) {
-            if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
-              canHitTarget = true;
-              break;
-            }
-          }
-          if (!canHitTarget) {
-            const blockHit = player.getBlockFromViewDirection({
-              maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-              includePassableBlocks: false,
-              includeLiquidBlocks: false,
-            });
-            canHitTarget = blockHit !== undefined;
-          }
-        } catch {}
-        targetAimCache.set(player.id, {
-          canHit: canHitTarget,
-          lastCheckTick: system.currentTick,
-        });
-      }
-    }
-
-    // 空ピルの色: 着弾中または射程内で壁/大型モブに当たる時は明るい灰色(§7)、射程外や対象がない時は暗灰色(§8)
-    const emptyColor = hook || canHitTarget ? "§7" : "§8";
-
-    if (pills >= maxPills) {
-      // 3つ満タン（着地中はグレーっぽい薄緑、空中で発動可能な場合は鮮やかな緑）
-      player.onScreenDisplay.setActionBar(`${activeColor}(▰▰▰)`);
-    } else if (pills === 0) {
-      // 0個（未着弾または巻き取り開始直後）: 射程内で壁に当たる時/着弾中は明るい空ピル、射程外は暗灰色の空ピル
-      player.onScreenDisplay.setActionBar(`${emptyColor}(▰▰▰)`);
-    } else {
-      // 1〜2個: 蓄積数に応じて表現（着地中はグレーっぽい薄緑、空中は鮮やかな緑、空きピルは射程判定を反映）
-      const filled = pills;
-      const empty = maxPills - filled;
-      const pillBar = activeColor + "▰".repeat(filled) + emptyColor + "▰".repeat(empty);
-      player.onScreenDisplay.setActionBar(`§7(${pillBar}§7)`);
-    }
-  } else if (playersWithPillHud.has(player.id)) {
-    // 手に持っておらず、かつフックも刺さっていない場合はピルHUDを非表示（クリア）
-    playersWithPillHud.delete(player.id);
-    try {
-      player.onScreenDisplay.setActionBar("");
-    } catch {}
-  }
+export function clearManualHookshotHud(player: Player): void {
+  try {
+    player.onScreenDisplay.setActionBar("");
+  } catch {}
 }
+
 
 /**
  * プレイヤーのフック状態をリセット
@@ -280,13 +201,8 @@ export function resetHook(
     } catch {}
   }
 
-  // フック解除時、マニュアルフックショットを持っていなければHUDを即座に非表示（クリア）
-  if (!isHoldingManualHookshot(player) && playersWithPillHud.has(player.id)) {
-    playersWithPillHud.delete(player.id);
-    try {
-      player.onScreenDisplay.setActionBar("");
-    } catch {}
-  }
+  // フック解除時、残存HUDがあればクリア
+  clearManualHookshotHud(player);
 }
 
 /**
@@ -443,6 +359,7 @@ export function handleManualHookshotUse(
       attachedTick: system.currentTick,
       isAuto,
       hasParachute,
+      lastChargedPillCount: 0,
     });
 
     try {
@@ -497,6 +414,29 @@ export function updateManualHookshots(): void {
     // 初回巻き取りが開始された後のみ経過tickをカウント（ピルチャージ用）
     if (hook.hasStartedWinding) {
       hook.chargeTicks++;
+
+      const currentPills = Math.min(
+        MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT,
+        Math.floor(
+          hook.chargeTicks / MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_TICKS_PER_PILL,
+        ),
+      );
+
+      if (currentPills > hook.lastChargedPillCount) {
+        hook.lastChargedPillCount = currentPills;
+        try {
+          let pitch = MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_PITCH_1;
+          if (currentPills === 2) {
+            pitch = MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_PITCH_2;
+          } else if (currentPills >= 3) {
+            pitch = MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_PITCH_3;
+          }
+          player.playSound(MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_SOUND, {
+            pitch,
+            volume: MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_SOUND_VOLUME,
+          });
+        } catch {}
+      }
     }
 
     // プレイヤーの視界を遮らないよう、目の高さ直下ではなく手元・胸元の位置から伸ばす
@@ -719,15 +659,12 @@ export function initManualHookshot(): void {
     }
   });
 
-  // 毎フレーム（1tick）更新ループ（移動インパルス & アクションバーHUD更新）
+  // 毎フレーム（1tick）更新ループ（移動インパルス & 巻き取り処理）
   system.runInterval(() => {
     updateManualHookshots();
-    for (const player of world.getAllPlayers()) {
-      updateManualHookshotHud(player);
-    }
   }, 1);
 
-  // プレイヤー死亡時にフック状態およびエフェクトタイマー、HUD状態をリセット
+  // プレイヤー死亡時にフック状態およびエフェクトタイマーをリセット
   world.afterEvents.entityDie.subscribe((event) => {
     const dead = event.deadEntity;
     if (dead instanceof Player) {
@@ -735,8 +672,7 @@ export function initManualHookshot(): void {
         resetHook(dead, false, false);
       }
       lastWindStartEffectTickMap.delete(dead.id);
-      playersWithPillHud.delete(dead.id);
-      targetAimCache.delete(dead.id);
+      clearManualHookshotHud(dead);
     }
   });
 
@@ -748,8 +684,7 @@ export function initManualHookshot(): void {
         resetHook(player, false, false);
       }
       lastWindStartEffectTickMap.delete(player.id);
-      playersWithPillHud.delete(player.id);
-      targetAimCache.delete(player.id);
+      clearManualHookshotHud(player);
     }
   });
 
@@ -761,8 +696,7 @@ export function initManualHookshot(): void {
         resetHook(player, false, false);
       }
       lastWindStartEffectTickMap.delete(player.id);
-      playersWithPillHud.delete(player.id);
-      targetAimCache.delete(player.id);
+      clearManualHookshotHud(player);
     }
   });
 
@@ -772,8 +706,6 @@ export function initManualHookshot(): void {
     if (player) {
       playerHooks.delete(player.id);
       lastWindStartEffectTickMap.delete(player.id);
-      playersWithPillHud.delete(player.id);
-      targetAimCache.delete(player.id);
     }
   });
 }

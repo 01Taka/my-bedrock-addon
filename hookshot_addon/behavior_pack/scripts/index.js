@@ -36,6 +36,15 @@ var MANUAL_HOOKSHOT_CONFIG = {
   PILL_CHARGE_TICKS_PER_PILL: 4,
   /** 解除時の爆風＆インパルス発動に必要な最大ピル数 */
   PILL_MAX_COUNT: 3,
+  /** ピルチャージSE設定（2: random.click） */
+  PILL_CHARGE_SOUND: "random.click",
+  PILL_CHARGE_SOUND_VOLUME: 0.8,
+  /** 1ピルチャージ時のピッチ */
+  PILL_CHARGE_PITCH_1: 1,
+  /** 2ピルチャージ時のピッチ */
+  PILL_CHARGE_PITCH_2: 1.2,
+  /** 3ピル（MAXチャージ）時のピッチ */
+  PILL_CHARGE_PITCH_3: 1.5,
   /** 落下速度リセット＆爆発エフェクトが発動する下方向速度の閾値（ブロック/tick。0.5で約10m/s以上の落下） */
   RESET_DOWNWARD_VELOCITY_THRESHOLD: 0.1,
   /** 落下速度リセット時に付与する低速落下（slow_falling）の持続tick数（マルチプレイのPing考慮で15tick=0.75秒。落下ダメージを確実に無効化） */
@@ -147,21 +156,6 @@ function isSneakButtonPressed(player) {
 }
 var playerHooks = /* @__PURE__ */ new Map();
 var lastWindStartEffectTickMap = /* @__PURE__ */ new Map();
-var playersWithPillHud = /* @__PURE__ */ new Set();
-var targetAimCache = /* @__PURE__ */ new Map();
-function isHoldingManualHookshot(player) {
-  try {
-    const equippable = player.getComponent("minecraft:equippable");
-    if (equippable) {
-      const mainhand = equippable.getEquipment(EquipmentSlot.Mainhand);
-      if (isHookshotItemId(mainhand?.typeId)) return true;
-      const offhand = equippable.getEquipment(EquipmentSlot.Offhand);
-      if (isHookshotItemId(offhand?.typeId)) return true;
-    }
-  } catch {
-  }
-  return false;
-}
 function isHoldingManualHookshotInMainhand(player) {
   try {
     const equippable = player.getComponent("minecraft:equippable");
@@ -173,78 +167,10 @@ function isHoldingManualHookshotInMainhand(player) {
   }
   return false;
 }
-function getChargedPillCount(player) {
-  const hook = playerHooks.get(player.id);
-  if (!hook || !hook.hasStartedWinding) return 0;
-  return Math.min(
-    MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT,
-    Math.floor(
-      hook.chargeTicks / MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_TICKS_PER_PILL
-    )
-  );
-}
-function updateManualHookshotHud(player) {
-  if (!player.isValid) return;
-  const shouldShow = isHoldingManualHookshot(player) || playerHooks.has(player.id);
-  if (shouldShow) {
-    playersWithPillHud.add(player.id);
-    const hook = playerHooks.get(player.id);
-    if (hook && !hook.hasStartedWinding) {
-      player.onScreenDisplay.setActionBar("\xA76(\u25B0\u25B0\u25B0)");
-      return;
-    }
-    const pills = getChargedPillCount(player);
-    const maxPills = MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT;
-    const activeColor = player.isOnGround ? "\xA72" : "\xA7a";
-    let canHitTarget = false;
-    if (!hook) {
-      const cached = targetAimCache.get(player.id);
-      if (cached && system.currentTick - cached.lastCheckTick < 4) {
-        canHitTarget = cached.canHit;
-      } else {
-        try {
-          const entityHits = player.getEntitiesFromViewDirection({
-            maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE
-          });
-          for (const hit of entityHits) {
-            if (isValidHookshotTarget(player, hit.entity) && isHeavyEntity(hit.entity)) {
-              canHitTarget = true;
-              break;
-            }
-          }
-          if (!canHitTarget) {
-            const blockHit = player.getBlockFromViewDirection({
-              maxDistance: MANUAL_HOOKSHOT_CONFIG.MAX_DISTANCE,
-              includePassableBlocks: false,
-              includeLiquidBlocks: false
-            });
-            canHitTarget = blockHit !== void 0;
-          }
-        } catch {
-        }
-        targetAimCache.set(player.id, {
-          canHit: canHitTarget,
-          lastCheckTick: system.currentTick
-        });
-      }
-    }
-    const emptyColor = hook || canHitTarget ? "\xA77" : "\xA78";
-    if (pills >= maxPills) {
-      player.onScreenDisplay.setActionBar(`${activeColor}(\u25B0\u25B0\u25B0)`);
-    } else if (pills === 0) {
-      player.onScreenDisplay.setActionBar(`${emptyColor}(\u25B0\u25B0\u25B0)`);
-    } else {
-      const filled = pills;
-      const empty = maxPills - filled;
-      const pillBar = activeColor + "\u25B0".repeat(filled) + emptyColor + "\u25B0".repeat(empty);
-      player.onScreenDisplay.setActionBar(`\xA77(${pillBar}\xA77)`);
-    }
-  } else if (playersWithPillHud.has(player.id)) {
-    playersWithPillHud.delete(player.id);
-    try {
-      player.onScreenDisplay.setActionBar("");
-    } catch {
-    }
+function clearManualHookshotHud(player) {
+  try {
+    player.onScreenDisplay.setActionBar("");
+  } catch {
   }
 }
 function resetHook(player, notify = true, isManualRelease = false) {
@@ -302,13 +228,7 @@ function resetHook(player, notify = true, isManualRelease = false) {
     } catch {
     }
   }
-  if (!isHoldingManualHookshot(player) && playersWithPillHud.has(player.id)) {
-    playersWithPillHud.delete(player.id);
-    try {
-      player.onScreenDisplay.setActionBar("");
-    } catch {
-    }
-  }
+  clearManualHookshotHud(player);
 }
 function tryDetachHookOnInteract(player) {
   if (!player.isValid) return false;
@@ -414,7 +334,8 @@ function handleManualHookshotUse(event, cancelCallback) {
       chargeTicks: 0,
       attachedTick: system.currentTick,
       isAuto,
-      hasParachute
+      hasParachute,
+      lastChargedPillCount: 0
     });
     try {
       player.dimension.spawnParticle(MANUAL_HOOKSHOT_CONFIG.HIT_PARTICLE, hitPos);
@@ -451,6 +372,28 @@ function updateManualHookshots() {
     const headPos = player.getHeadLocation();
     if (hook.hasStartedWinding) {
       hook.chargeTicks++;
+      const currentPills = Math.min(
+        MANUAL_HOOKSHOT_CONFIG.PILL_MAX_COUNT,
+        Math.floor(
+          hook.chargeTicks / MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_TICKS_PER_PILL
+        )
+      );
+      if (currentPills > hook.lastChargedPillCount) {
+        hook.lastChargedPillCount = currentPills;
+        try {
+          let pitch = MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_PITCH_1;
+          if (currentPills === 2) {
+            pitch = MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_PITCH_2;
+          } else if (currentPills >= 3) {
+            pitch = MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_PITCH_3;
+          }
+          player.playSound(MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_SOUND, {
+            pitch,
+            volume: MANUAL_HOOKSHOT_CONFIG.PILL_CHARGE_SOUND_VOLUME
+          });
+        } catch {
+        }
+      }
     }
     const playerPos = {
       x: headPos.x,
@@ -609,9 +552,6 @@ function initManualHookshot() {
   });
   system.runInterval(() => {
     updateManualHookshots();
-    for (const player of world.getAllPlayers()) {
-      updateManualHookshotHud(player);
-    }
   }, 1);
   world.afterEvents.entityDie.subscribe((event) => {
     const dead = event.deadEntity;
@@ -620,8 +560,7 @@ function initManualHookshot() {
         resetHook(dead, false, false);
       }
       lastWindStartEffectTickMap.delete(dead.id);
-      playersWithPillHud.delete(dead.id);
-      targetAimCache.delete(dead.id);
+      clearManualHookshotHud(dead);
     }
   });
   world.afterEvents.playerDimensionChange.subscribe((event) => {
@@ -631,8 +570,7 @@ function initManualHookshot() {
         resetHook(player, false, false);
       }
       lastWindStartEffectTickMap.delete(player.id);
-      playersWithPillHud.delete(player.id);
-      targetAimCache.delete(player.id);
+      clearManualHookshotHud(player);
     }
   });
   world.afterEvents.playerSpawn.subscribe((event) => {
@@ -642,8 +580,7 @@ function initManualHookshot() {
         resetHook(player, false, false);
       }
       lastWindStartEffectTickMap.delete(player.id);
-      playersWithPillHud.delete(player.id);
-      targetAimCache.delete(player.id);
+      clearManualHookshotHud(player);
     }
   });
   world.beforeEvents.playerLeave.subscribe((event) => {
@@ -651,8 +588,6 @@ function initManualHookshot() {
     if (player) {
       playerHooks.delete(player.id);
       lastWindStartEffectTickMap.delete(player.id);
-      playersWithPillHud.delete(player.id);
-      targetAimCache.delete(player.id);
     }
   });
 }

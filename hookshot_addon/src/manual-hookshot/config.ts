@@ -38,6 +38,16 @@ export const MANUAL_HOOKSHOT_CONFIG = {
   /** 解除時の爆風＆インパルス発動に必要な最大ピル数 */
   PILL_MAX_COUNT: 3,
 
+  /** ピルチャージSE設定（2: random.click） */
+  PILL_CHARGE_SOUND: "random.click",
+  PILL_CHARGE_SOUND_VOLUME: 0.8,
+  /** 1ピルチャージ時のピッチ */
+  PILL_CHARGE_PITCH_1: 1.0,
+  /** 2ピルチャージ時のピッチ */
+  PILL_CHARGE_PITCH_2: 1.2,
+  /** 3ピル（MAXチャージ）時のピッチ */
+  PILL_CHARGE_PITCH_3: 1.5,
+
   /** 落下速度リセット＆爆発エフェクトが発動する下方向速度の閾値（ブロック/tick。0.5で約10m/s以上の落下） */
   RESET_DOWNWARD_VELOCITY_THRESHOLD: 0.1,
 
@@ -135,3 +145,5 @@ export function isParachuteHookshotItemId(typeId: string | undefined): boolean {
     typeId === MANUAL_HOOKSHOT_CONFIG.AUTO_PARACHUTE_ITEM_ID
   );
 }
+
+

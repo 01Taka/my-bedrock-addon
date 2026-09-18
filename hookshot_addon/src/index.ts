@@ -8,3 +8,5 @@ system.run(() => {
 
 // フックショットの初期化
 initManualHookshot();
+
+
