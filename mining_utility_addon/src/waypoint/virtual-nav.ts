@@ -1237,12 +1237,6 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
         // インベントリ内にリカバリーコンパスを持っていない間は表示しない（固定キーは保持）
         pinnedWp = null;
       }
-    } else if (
-      isPlayerHoldingRecoveryCompass(player) &&
-      state.recoveryCompassDeathOnly
-    ) {
-      // 死亡地点のみ表示モード中は通常ウェイポイントの固定表示も一時停止
-      pinnedWp = null;
     }
   }
 

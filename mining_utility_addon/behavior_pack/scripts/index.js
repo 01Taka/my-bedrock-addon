@@ -2147,6 +2147,10 @@ function getNearbyToggleableWaypoint(player, headLoc, viewDir) {
       if (wp.creatorId !== player.id || !isPlayerHoldingRecoveryCompass(player)) {
         continue;
       }
+    } else {
+      if (isPlayerHoldingRecoveryCompass(player) && playerVirtualNavMap.get(player.id)?.recoveryCompassDeathOnly) {
+        continue;
+      }
     }
     const dx = wp.pos.x - headLoc.x;
     const dy = wp.pos.y - headLoc.y;
@@ -2688,8 +2692,6 @@ function updatePlayerVirtualNavHUD(player) {
       } else if (!hasRecoveryCompassInInventory(player)) {
         pinnedWp = null;
       }
-    } else if (isPlayerHoldingRecoveryCompass(player) && state.recoveryCompassDeathOnly) {
-      pinnedWp = null;
     }
   }
   if (isHolding) {
@@ -2920,7 +2922,16 @@ function displayHUDWaypoints(player) {
   const focusedWp = getFocusedWaypoint(player);
   const focusedKey = focusedWp ? getWaypointKey2(focusedWp) : null;
   const pinnedKey = getPinnedWaypointKey(player);
-  const isGrayMode = pinnedKey !== null && !player.isSneaking;
+  let isPinnedVisible = false;
+  if (pinnedKey) {
+    const pinnedWp = waypointCache.find(
+      (wp) => getWaypointKey2(wp) === pinnedKey
+    );
+    if (pinnedWp && isWaypointVisibleToPlayer(player, pinnedWp, true)) {
+      isPinnedVisible = true;
+    }
+  }
+  const isGrayMode = isPinnedVisible && !player.isSneaking;
   const originX = headLoc.x + offset.x;
   const originY = headLoc.y + offset.y;
   const originZ = headLoc.z + offset.z;

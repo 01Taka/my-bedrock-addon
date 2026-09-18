@@ -244,8 +244,17 @@ export function displayHUDWaypoints(player: Player) {
   const focusedKey = focusedWp ? getWaypointKey(focusedWp) : null;
 
   const pinnedKey = getPinnedWaypointKey(player);
-  // 固定の際にコンパスを所持して、固定あり、シフトなしの場合、固定されたHUDのパーティクル以外は灰色に変える
-  const isGrayMode = pinnedKey !== null && !player.isSneaking;
+  let isPinnedVisible = false;
+  if (pinnedKey) {
+    const pinnedWp = waypointCache.find(
+      (wp) => getWaypointKey(wp) === pinnedKey,
+    );
+    if (pinnedWp && isWaypointVisibleToPlayer(player, pinnedWp, true)) {
+      isPinnedVisible = true;
+    }
+  }
+  // 固定の際にコンパスを所持して、固定表示が可視かつシフトなしの場合、固定されたHUDのパーティクル以外は灰色に変える
+  const isGrayMode = isPinnedVisible && !player.isSneaking;
 
   // 仮想前進時の視点座標（前進していない場合は実際の頭座標）
   const originX = headLoc.x + offset.x;
