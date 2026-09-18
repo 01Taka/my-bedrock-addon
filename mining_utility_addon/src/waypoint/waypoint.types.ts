@@ -96,6 +96,11 @@ export const BANNER_COLOR_CHAT_CODES: Record<BannerColorName, string> = {
   white: "§f",
 };
 
+/**
+ * プレイヤー付近のHUD非表示および表示・非表示のトグル可能範囲（メートル）
+ */
+export const WAYPOINT_PROXIMITY_RANGE = 4.0;
+
 // ウェイポイントの型定義
 export interface Waypoint {
   readonly dim: string;

@@ -6,7 +6,7 @@ import {
   Player,
 } from "@minecraft/server";
 import { waypointCache } from "./store-waypoint";
-import { BANNER_COLOR_RGBS } from "./waypoint.types";
+import { BANNER_COLOR_RGBS, WAYPOINT_PROXIMITY_RANGE } from "./waypoint.types";
 import {
   getPlayerVirtualNav,
   getCurrentVirtualOffset,
@@ -15,6 +15,7 @@ import {
   isPlayerHoldingCompass,
   getPinnedWaypointKey,
   isWaypointHiddenForPlayer,
+  getNearbyToggleableWaypoint,
 } from "./virtual-nav";
 
 /**
@@ -106,6 +107,54 @@ export function spawnWaypointParticle(options: WaypointParticleOptions): void {
 }
 
 /**
+ * 【特定プレイヤー専用】指定したプレイヤーの画面にのみ、ウェイポイント実体位置のパーティクルをスポーンする。
+ * （非表示設定しているプレイヤーを避けて個別に描画するために使用）
+ */
+export function spawnWaypointBodyParticleForPlayer(
+  options: PlayerWaypointParticleOptions,
+): void {
+  const { player, location, color, size, durationTicks, dimension } = options;
+
+  if (!player || !player.isValid || !location) return;
+
+  // ディメンション制限チェック
+  if (dimension) {
+    const dimId =
+      typeof dimension === "string"
+        ? dimension.includes(":")
+          ? dimension
+          : `minecraft:${dimension}`
+        : dimension.id;
+    if (player.dimension.id !== dimId) return;
+  }
+
+  // tick (20 tick = 1秒) を秒数 (float) に変換
+  const lifetimeSeconds = Math.max(0.05, durationTicks / 20.0);
+  const safeColor = color ?? { r: 1, g: 1, b: 1 };
+
+  const molang = new MolangVariableMap();
+  molang.setFloat("variable.marker_size", Math.max(0.01, size));
+  molang.setFloat("variable.color.r", safeColor.r);
+  molang.setFloat("variable.color.g", safeColor.g);
+  molang.setFloat("variable.color.b", safeColor.b);
+  molang.setFloat("variable.color_r", safeColor.r);
+  molang.setFloat("variable.color_g", safeColor.g);
+  molang.setFloat("variable.color_b", safeColor.b);
+  molang.setFloat("variable.lifetime", lifetimeSeconds);
+  molang.setColorRGB("variable.color", {
+    red: safeColor.r,
+    green: safeColor.g,
+    blue: safeColor.b,
+  });
+
+  try {
+    player.spawnParticle("mining_utility:waypoint_particle", location, molang);
+  } catch (e) {
+    // チャンク未ロードやディメンションエラー等でスポーン失敗してもタイマーをクラッシュさせない
+  }
+}
+
+/**
  * 【特定プレイヤー専用】指定したプレイヤーの画面にのみ、指定時間（durationTicks）表示されるウェイポイントパーティクルをスポーンする。
  *
  * player.spawnParticle を使用するためパケットが対象プレイヤー端末にしか送信されず、
@@ -171,6 +220,14 @@ export function displayHUDWaypoints(player: Player) {
   if (!isPlayerHoldingCompass(player)) return;
 
   const headLoc = player.getHeadLocation();
+  const viewDir = player.getViewDirection();
+
+  // 【誤操作防止】近接範囲内（WAYPOINT_PROXIMITY_RANGE）でウェイポイントの方向を向いている場合、
+  // コンパスによるすべての手前パーティクルを非表示にする
+  if (getNearbyToggleableWaypoint(player, headLoc, viewDir)) {
+    return;
+  }
+
   const dimension = player.dimension;
   const offset = getCurrentVirtualOffset(player);
   const isVirtual =
@@ -209,8 +266,8 @@ export function displayHUDWaypoints(player: Player) {
       const dz = targetZ - originZ;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-      // 通常時かつ4m未満の至近距離は実体表示で十分なためスキップ
-      if (!isVirtual && dist < 4.0) continue;
+      // 通常時かつ近接範囲未満の至近距離は実体表示で十分なためスキップ
+      if (!isVirtual && dist < WAYPOINT_PROXIMITY_RANGE) continue;
 
       // ゼロ除算防止
       const safeDist = Math.max(0.1, dist);

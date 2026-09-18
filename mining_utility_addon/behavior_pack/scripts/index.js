@@ -1636,6 +1636,7 @@ var BANNER_COLOR_CHAT_CODES = {
   orange: "\xA76",
   white: "\xA7f"
 };
+var WAYPOINT_PROXIMITY_RANGE = 4;
 function getWaypointKey(wp) {
   const shortDim = wp.dim.replace(/^minecraft:/, "");
   return `${shortDim}@${Math.floor(wp.pos.x)},${Math.floor(wp.pos.y)},${Math.floor(wp.pos.z)}`;
@@ -1874,6 +1875,8 @@ function correctWaypointMarkerPositions() {
 var SPHERE_RADIUS = 30;
 var PRE_STEP_DISTANCE = 50;
 var ZOOM_ANIM_DURATION_TICKS = 10;
+var PIN_TOGGLE_COOLDOWN_TICKS = 15;
+var REMOTE_HIDE_DOUBLE_CLICK_TICKS = 15;
 var COS_15_DEG = Math.cos(15 * Math.PI / 180);
 var playerVirtualNavMap = /* @__PURE__ */ new Map();
 var playerFocusedWaypointMap = /* @__PURE__ */ new Map();
@@ -1912,6 +1915,32 @@ function normalize(v) {
 }
 function getPlayerVirtualNav(player) {
   return playerVirtualNavMap.get(player.id);
+}
+function getOrCreatePlayerVirtualNav(player) {
+  let state = playerVirtualNavMap.get(player.id);
+  if (!state) {
+    const currentTick = system4.currentTick;
+    state = {
+      targetOffset: { x: 0, y: 0, z: 0 },
+      startOffset: { x: 0, y: 0, z: 0 },
+      animStartTick: currentTick,
+      animDurationTicks: ZOOM_ANIM_DURATION_TICKS,
+      lastUseTick: 0,
+      wasHoldingCompass: true,
+      pinnedWaypointKey: null,
+      wasShowingHUD: false,
+      unpinNoticeUntilTick: 0,
+      lastLeftClickTick: 0,
+      lastPinToggleTick: 0,
+      noticeText: null,
+      noticeUntilTick: 0,
+      remoteHideTargetKey: null,
+      remoteHideClickTick: 0,
+      lastSilkTouchDeleteTick: 0
+    };
+    playerVirtualNavMap.set(player.id, state);
+  }
+  return state;
 }
 function clearPlayerVirtualNav(playerId) {
   playerVirtualNavMap.delete(playerId);
@@ -1991,6 +2020,34 @@ function findRayClosestWaypoint(origin, direction, dimensionId, player) {
   }
   return closest;
 }
+function getNearbyToggleableWaypoint(player, headLoc, viewDir) {
+  const currentDim = player.dimension.id.replace(/^minecraft:/, "");
+  let closeTargetWp = null;
+  let closestDist = 999;
+  const COS_30_DEG = Math.cos(30 * Math.PI / 180);
+  for (const wp of waypointCache) {
+    const wpDim = wp.dim.replace(/^minecraft:/, "");
+    if (wpDim !== currentDim) continue;
+    const dx = wp.pos.x - headLoc.x;
+    const dy = wp.pos.y - headLoc.y;
+    const dz = wp.pos.z - headLoc.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist <= WAYPOINT_PROXIMITY_RANGE && dist > 0.01) {
+      const dirX = dx / dist;
+      const dirY = dy / dist;
+      const dirZ = dz / dist;
+      const dot = viewDir.x * dirX + viewDir.y * dirY + viewDir.z * dirZ;
+      if (dot >= COS_30_DEG && dist < closestDist) {
+        closestDist = dist;
+        closeTargetWp = wp;
+      }
+    }
+  }
+  if (closeTargetWp) {
+    return { waypoint: closeTargetWp, dist: closestDist };
+  }
+  return null;
+}
 function getRelative8DirectionArrow(player, targetPos) {
   const headLoc = player.getHeadLocation();
   const viewDir = player.getViewDirection();
@@ -2008,6 +2065,36 @@ function getRelative8DirectionArrow(player, targetPos) {
   if (diffDeg >= -157.5 && diffDeg < -112.5) return "\u2199";
   if (diffDeg >= -112.5 && diffDeg < -67.5) return "\u2190";
   return "\u2196";
+}
+function isPlayerZoomed(player) {
+  const state = playerVirtualNavMap.get(player.id);
+  if (!state) return false;
+  return Math.abs(state.targetOffset.x) > 0.01 || Math.abs(state.targetOffset.y) > 0.01 || Math.abs(state.targetOffset.z) > 0.01;
+}
+function formatWaypointHUDText(player, waypoint, actionTag = "", isZoomed) {
+  const zoomed = isZoomed !== void 0 ? isZoomed : isPlayerZoomed(player);
+  const zoomPrefix = zoomed ? "\xA77\u30BA\u30FC\u30E0\u4E2D / " : "";
+  const headLoc = player.getHeadLocation();
+  const dx = waypoint.pos.x - headLoc.x;
+  const dy = waypoint.pos.y - headLoc.y;
+  const dz = waypoint.pos.z - headLoc.z;
+  const dist = Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz));
+  const displayName = getWaypointDisplayName(waypoint);
+  const arrow = getRelative8DirectionArrow(player, waypoint.pos);
+  const tagPart = actionTag ? `${actionTag} ` : "";
+  return `${zoomPrefix}${tagPart}\xA7e${displayName} \xA7f${dist}m \xA7b${arrow}`;
+}
+function showWaypointOperationNotice(player, waypoint, actionTag, durationTicks = 15) {
+  const state = getOrCreatePlayerVirtualNav(player);
+  const currentTick = system4.currentTick;
+  const text = formatWaypointHUDText(player, waypoint, actionTag);
+  state.noticeText = text;
+  state.noticeUntilTick = currentTick + durationTicks;
+  state.wasShowingHUD = true;
+  try {
+    player.onScreenDisplay.setActionBar(text);
+  } catch {
+  }
 }
 function findTargetWaypointSphereFromPreStep(origin50, direction, dimensionId, radius) {
   let bestHit = null;
@@ -2048,25 +2135,8 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
   if (!(player instanceof Player6) || !player.isValid) return;
   if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
   const currentTick = system4.currentTick;
-  let state = playerVirtualNavMap.get(player.id);
-  if (!state) {
-    state = {
-      targetOffset: { x: 0, y: 0, z: 0 },
-      startOffset: { x: 0, y: 0, z: 0 },
-      animStartTick: currentTick,
-      animDurationTicks: ZOOM_ANIM_DURATION_TICKS,
-      lastUseTick: 0,
-      wasHoldingCompass: true,
-      pinnedWaypointKey: null,
-      wasShowingHUD: false,
-      unpinNoticeUntilTick: 0,
-      lastLeftClickTick: 0,
-      noticeText: null,
-      noticeUntilTick: 0
-    };
-    playerVirtualNavMap.set(player.id, state);
-  }
-  if (!player.isSneaking && currentTick - state.lastUseTick < 5) {
+  const state = getOrCreatePlayerVirtualNav(player);
+  if (currentTick - state.lastUseTick < 5) {
     cancelCallback?.();
     return;
   }
@@ -2080,59 +2150,65 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
     y: headLoc.y + currentOffset.y,
     z: headLoc.z + currentOffset.z
   };
-  if (viewDir.y < -0.85) {
-    const pLoc = player.location;
-    const currentDim = player.dimension.id.replace(/^minecraft:/, "");
-    const matchedWaypoint = waypointCache.find((wp) => {
-      if (wp.dim !== currentDim) return false;
-      const sameX = Math.floor(pLoc.x) === Math.floor(wp.pos.x);
-      const sameZ = Math.floor(pLoc.z) === Math.floor(wp.pos.z);
-      const sameY = Math.floor(pLoc.y) === Math.floor(wp.pos.y) || Math.floor(pLoc.y - 0.5) === Math.floor(wp.pos.y) || Math.abs(pLoc.y - wp.pos.y) <= 1.8;
-      return sameX && sameZ && sameY;
-    });
-    if (matchedWaypoint) {
-      deleteWaypoint(player.dimension, matchedWaypoint.pos);
-      const deletedKey = getWaypointKey2(matchedWaypoint);
-      if (state.pinnedWaypointKey === deletedKey) {
-        state.pinnedWaypointKey = null;
-      }
-      removeWaypointMarker(player.dimension, deletedKey, matchedWaypoint.pos);
-      const deletedDisplayName = getWaypointDisplayName(matchedWaypoint);
-      const wpPos = { ...matchedWaypoint.pos };
-      const dim = player.dimension;
-      try {
-        player.sendMessage(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
-        player.onScreenDisplay.setActionBar(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
-        world6.sendMessage(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`);
-      } catch {
-      }
+  const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+  if (nearbyTarget) {
+    cancelCallback?.();
+    if (currentTick - state.lastPinToggleTick < PIN_TOGGLE_COOLDOWN_TICKS) {
+      return;
+    }
+    state.lastPinToggleTick = currentTick;
+    const targetWp = nearbyTarget.waypoint;
+    const key = getWaypointKey2(targetWp);
+    const isHidden = isWaypointHiddenForPlayer(player, key);
+    if (isHidden) {
+      setWaypointHiddenForPlayer(player, key, false);
+      state.pinnedWaypointKey = key;
+      showWaypointOperationNotice(player, targetWp, "\xA76[\u56FA\u5B9A]");
       system4.run(() => {
         try {
           if (player && player.isValid) {
-            player.playSound("random.break", { pitch: 1.2, volume: 1 });
+            player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
           }
-          dim.playSound("random.break", wpPos, { pitch: 1.2, volume: 1 });
         } catch {
         }
       });
-      return;
+    } else if (state.pinnedWaypointKey === key) {
+      state.pinnedWaypointKey = null;
+      showWaypointOperationNotice(player, targetWp, "\xA77[\u56FA\u5B9A\u89E3\u9664]");
+      system4.run(() => {
+        try {
+          if (player && player.isValid) {
+            player.playSound("random.break", { pitch: 1, volume: 0.8 });
+          }
+        } catch {
+        }
+      });
+    } else {
+      state.pinnedWaypointKey = key;
+      showWaypointOperationNotice(player, targetWp, "\xA76[\u56FA\u5B9A]");
+      system4.run(() => {
+        try {
+          if (player && player.isValid) {
+            player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
+          }
+        } catch {
+        }
+      });
     }
+    return;
   }
   if (player.isSneaking) {
+    if (currentTick - state.lastPinToggleTick < PIN_TOGGLE_COOLDOWN_TICKS) {
+      return;
+    }
     const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
     if (closestHit) {
+      state.lastPinToggleTick = currentTick;
       const key = getWaypointKey2(closestHit.waypoint);
       const hitDisplayName = getWaypointDisplayName(closestHit.waypoint);
       if (state.pinnedWaypointKey === key) {
         state.pinnedWaypointKey = null;
-        state.unpinNoticeUntilTick = currentTick + 15;
-        state.noticeText = "\xA77[\u56FA\u5B9A\u89E3\u9664]";
-        state.noticeUntilTick = currentTick + 15;
-        state.wasShowingHUD = true;
-        try {
-          player.onScreenDisplay.setActionBar("\xA77[\u56FA\u5B9A\u89E3\u9664]");
-        } catch {
-        }
+        showWaypointOperationNotice(player, closestHit.waypoint, "\xA77[\u56FA\u5B9A\u89E3\u9664]");
         system4.run(() => {
           try {
             if (player && player.isValid) {
@@ -2143,15 +2219,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
         });
       } else {
         state.pinnedWaypointKey = key;
-        state.unpinNoticeUntilTick = 0;
-        state.noticeText = null;
-        state.noticeUntilTick = 0;
-        try {
-          player.onScreenDisplay.setActionBar(
-            `\xA76[Waypoint] \xA7f${hitDisplayName} \xA76\u3092\u56FA\u5B9A\u3057\u307E\u3057\u305F`
-          );
-        } catch {
-        }
+        showWaypointOperationNotice(player, closestHit.waypoint, "\xA76[\u56FA\u5B9A]");
         system4.run(() => {
           try {
             if (player && player.isValid) {
@@ -2224,25 +2292,8 @@ function handleCompassLeftClick(player, itemStack) {
   if (!(player instanceof Player6) || !player.isValid) return;
   if (!itemStack || itemStack.typeId !== "minecraft:compass") return;
   const currentTick = system4.currentTick;
-  let state = playerVirtualNavMap.get(player.id);
-  if (!state) {
-    state = {
-      targetOffset: { x: 0, y: 0, z: 0 },
-      startOffset: { x: 0, y: 0, z: 0 },
-      animStartTick: currentTick,
-      animDurationTicks: ZOOM_ANIM_DURATION_TICKS,
-      lastUseTick: 0,
-      wasHoldingCompass: true,
-      pinnedWaypointKey: null,
-      wasShowingHUD: false,
-      unpinNoticeUntilTick: 0,
-      lastLeftClickTick: 0,
-      noticeText: null,
-      noticeUntilTick: 0
-    };
-    playerVirtualNavMap.set(player.id, state);
-  }
-  if (currentTick - state.lastLeftClickTick < 4) {
+  const state = getOrCreatePlayerVirtualNav(player);
+  if (currentTick - state.lastLeftClickTick < 2) {
     return;
   }
   state.lastLeftClickTick = currentTick;
@@ -2255,43 +2306,19 @@ function handleCompassLeftClick(player, itemStack) {
     z: headLoc.z + currentOffset.z
   };
   const isZoomed = Math.abs(currentOffset.x) > 0.01 || Math.abs(currentOffset.y) > 0.01 || Math.abs(currentOffset.z) > 0.01 || Math.abs(state.targetOffset.x) > 0.01 || Math.abs(state.targetOffset.y) > 0.01 || Math.abs(state.targetOffset.z) > 0.01;
-  const zoomPrefix = isZoomed ? "\xA77\u30BA\u30FC\u30E0\u4E2D / " : "";
   if (!isZoomed) {
-    const currentDim = player.dimension.id.replace(/^minecraft:/, "");
-    let closeTargetWp = null;
-    let closestDist = 999;
-    const COS_30_DEG = Math.cos(30 * Math.PI / 180);
-    for (const wp of waypointCache) {
-      const wpDim = wp.dim.replace(/^minecraft:/, "");
-      if (wpDim !== currentDim) continue;
-      const dx = wp.pos.x - headLoc.x;
-      const dy = wp.pos.y - headLoc.y;
-      const dz = wp.pos.z - headLoc.z;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist <= 4 && dist > 0.01) {
-        const dirX = dx / dist;
-        const dirY = dy / dist;
-        const dirZ = dz / dist;
-        const dot = viewDir.x * dirX + viewDir.y * dirY + viewDir.z * dirZ;
-        if (dot >= COS_30_DEG && dist < closestDist) {
-          closestDist = dist;
-          closeTargetWp = wp;
-        }
-      }
-    }
-    if (closeTargetWp) {
-      const wpKey = getWaypointKey2(closeTargetWp);
-      const isNowHidden = toggleWaypointHiddenForPlayer(player, wpKey);
-      const displayName = getWaypointDisplayName(closeTargetWp);
-      const realDist = Math.round(closestDist);
-      const arrow = getRelative8DirectionArrow(player, closeTargetWp.pos);
-      if (isNowHidden && state.pinnedWaypointKey === wpKey) {
+    const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+    if (nearbyTarget) {
+      state.remoteHideTargetKey = null;
+      state.remoteHideClickTick = 0;
+      const { waypoint: closeTargetWp } = nearbyTarget;
+      const wpKey2 = getWaypointKey2(closeTargetWp);
+      const isNowHidden = toggleWaypointHiddenForPlayer(player, wpKey2);
+      if (isNowHidden && state.pinnedWaypointKey === wpKey2) {
         state.pinnedWaypointKey = null;
       }
-      state.noticeUntilTick = currentTick + 15;
-      state.wasShowingHUD = true;
       if (isNowHidden) {
-        state.noticeText = `\xA77[\u975E\u8868\u793A] \xA7e${displayName} \xA7f${realDist}m \xA7b${arrow}`;
+        showWaypointOperationNotice(player, closeTargetWp, "\xA77[\u975E\u8868\u793A]");
         system4.run(() => {
           try {
             if (player && player.isValid) {
@@ -2301,7 +2328,7 @@ function handleCompassLeftClick(player, itemStack) {
           }
         });
       } else {
-        state.noticeText = `\xA7a[\u8868\u793A] \xA7e${displayName} \xA7f${realDist}m \xA7b${arrow}`;
+        showWaypointOperationNotice(player, closeTargetWp, "\xA7a[\u8868\u793A]");
         system4.run(() => {
           try {
             if (player && player.isValid) {
@@ -2311,37 +2338,41 @@ function handleCompassLeftClick(player, itemStack) {
           }
         });
       }
-      try {
-        player.onScreenDisplay.setActionBar(state.noticeText);
-      } catch {
-      }
       return;
     }
   }
   const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
-  if (closestHit) {
-    const key = getWaypointKey2(closestHit.waypoint);
-    const hitDisplayName = getWaypointDisplayName(closestHit.waypoint);
-    setWaypointHiddenForPlayer(player, key, true);
-    if (state.pinnedWaypointKey === key) {
+  if (!closestHit) {
+    state.remoteHideTargetKey = null;
+    state.remoteHideClickTick = 0;
+    return;
+  }
+  const targetWp = closestHit.waypoint;
+  const wpKey = getWaypointKey2(targetWp);
+  if (state.remoteHideTargetKey === wpKey && currentTick - state.remoteHideClickTick <= REMOTE_HIDE_DOUBLE_CLICK_TICKS) {
+    state.remoteHideTargetKey = null;
+    state.remoteHideClickTick = 0;
+    setWaypointHiddenForPlayer(player, wpKey, true);
+    if (state.pinnedWaypointKey === wpKey) {
       state.pinnedWaypointKey = null;
     }
-    const hDx = closestHit.waypoint.pos.x - headLoc.x;
-    const hDy = closestHit.waypoint.pos.y - headLoc.y;
-    const hDz = closestHit.waypoint.pos.z - headLoc.z;
-    const hDist = Math.round(Math.sqrt(hDx * hDx + hDy * hDy + hDz * hDz));
-    const hArrow = getRelative8DirectionArrow(player, closestHit.waypoint.pos);
-    state.noticeText = `${zoomPrefix}\xA7c[\u975E\u8868\u793A] \xA7e${hitDisplayName} \xA7f${hDist}m \xA7b${hArrow}`;
-    state.noticeUntilTick = currentTick + 15;
-    state.wasShowingHUD = true;
-    try {
-      player.onScreenDisplay.setActionBar(state.noticeText);
-    } catch {
-    }
+    showWaypointOperationNotice(player, targetWp, "\xA7c[\u975E\u8868\u793A \u25A0\u25A0]");
     system4.run(() => {
       try {
         if (player && player.isValid) {
-          player.playSound("random.break", { pitch: 1, volume: 0.9 });
+          player.playSound("random.break", { pitch: 1, volume: 0.8 });
+        }
+      } catch {
+      }
+    });
+  } else {
+    state.remoteHideTargetKey = wpKey;
+    state.remoteHideClickTick = currentTick;
+    showWaypointOperationNotice(player, targetWp, "\xA7c[\u975E\u8868\u793A \u25A0\u25A1]");
+    system4.run(() => {
+      try {
+        if (player && player.isValid) {
+          player.playSound("random.orb", { pitch: 1.2, volume: 0.8 });
         }
       } catch {
       }
@@ -2350,24 +2381,7 @@ function handleCompassLeftClick(player, itemStack) {
 }
 function updatePlayerVirtualNavHUD(player) {
   const currentTick = system4.currentTick;
-  let state = playerVirtualNavMap.get(player.id);
-  if (!state) {
-    state = {
-      targetOffset: { x: 0, y: 0, z: 0 },
-      startOffset: { x: 0, y: 0, z: 0 },
-      animStartTick: currentTick,
-      animDurationTicks: ZOOM_ANIM_DURATION_TICKS,
-      lastUseTick: 0,
-      wasHoldingCompass: false,
-      pinnedWaypointKey: null,
-      wasShowingHUD: false,
-      unpinNoticeUntilTick: 0,
-      lastLeftClickTick: 0,
-      noticeText: null,
-      noticeUntilTick: 0
-    };
-    playerVirtualNavMap.set(player.id, state);
-  }
+  const state = getOrCreatePlayerVirtualNav(player);
   const isHolding = isPlayerHoldingCompass(player);
   if (state.wasHoldingCompass && !isHolding) {
     const currentOffset2 = getCurrentVirtualOffset(player);
@@ -2403,20 +2417,27 @@ function updatePlayerVirtualNavHUD(player) {
       pinnedWp = null;
     }
   }
-  if (isHolding && player.isSneaking) {
-    const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
-    if (closestHit) {
-      activeWaypoint = closestHit.waypoint;
+  if (isHolding) {
+    const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+    if (nearbyTarget) {
+      activeWaypoint = nearbyTarget.waypoint;
       isPinnedActive = pinnedWp !== null && getWaypointKey2(activeWaypoint) === state.pinnedWaypointKey;
+    } else if (player.isSneaking) {
+      const closestHit = findRayClosestWaypoint(virtHead, viewDir, player.dimension.id, player);
+      if (closestHit) {
+        activeWaypoint = closestHit.waypoint;
+        isPinnedActive = pinnedWp !== null && getWaypointKey2(activeWaypoint) === state.pinnedWaypointKey;
+      } else if (pinnedWp) {
+        activeWaypoint = pinnedWp;
+        isPinnedActive = true;
+      }
     } else if (pinnedWp) {
       activeWaypoint = pinnedWp;
       isPinnedActive = true;
     }
-  } else {
-    if (pinnedWp) {
-      activeWaypoint = pinnedWp;
-      isPinnedActive = true;
-    }
+  } else if (pinnedWp) {
+    activeWaypoint = pinnedWp;
+    isPinnedActive = true;
   }
   playerFocusedWaypointMap.set(player.id, activeWaypoint);
   const isZoomed = isHolding && (Math.abs(currentOffset.x) > 0.01 || Math.abs(currentOffset.y) > 0.01 || Math.abs(currentOffset.z) > 0.01 || Math.abs(state.targetOffset.x) > 0.01 || Math.abs(state.targetOffset.y) > 0.01 || Math.abs(state.targetOffset.z) > 0.01);
@@ -2427,29 +2448,11 @@ function updatePlayerVirtualNavHUD(player) {
     } catch {
     }
     state.wasShowingHUD = true;
-  } else if (currentTick < state.unpinNoticeUntilTick) {
-    try {
-      player.onScreenDisplay.setActionBar("\xA77[\u56FA\u5B9A\u89E3\u9664]");
-    } catch {
-    }
-    state.wasShowingHUD = true;
   } else if (activeWaypoint) {
-    const dx = activeWaypoint.pos.x - headLoc.x;
-    const dy = activeWaypoint.pos.y - headLoc.y;
-    const dz = activeWaypoint.pos.z - headLoc.z;
-    const realDist = Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz));
-    const arrow = getRelative8DirectionArrow(player, activeWaypoint.pos);
-    const activeDisplayName = getWaypointDisplayName(activeWaypoint);
+    const actionTag = isPinnedActive && isHolding ? "\xA76[\u56FA\u5B9A]" : "";
+    const text = formatWaypointHUDText(player, activeWaypoint, actionTag, isZoomed);
     try {
-      if (isPinnedActive && isHolding) {
-        player.onScreenDisplay.setActionBar(
-          `${zoomPrefix}\xA76[\u56FA\u5B9A] \xA7e${activeDisplayName} \xA7f${realDist}m \xA7b${arrow}`
-        );
-      } else {
-        player.onScreenDisplay.setActionBar(
-          `${zoomPrefix}\xA7e${activeDisplayName} \xA7f${realDist}m \xA7b${arrow}`
-        );
-      }
+      player.onScreenDisplay.setActionBar(text);
       state.wasShowingHUD = true;
     } catch {
     }
@@ -2466,6 +2469,60 @@ function updatePlayerVirtualNavHUD(player) {
     }
     state.wasShowingHUD = false;
   }
+}
+function hasSilkTouchEnchantment(itemStack) {
+  if (!itemStack) return false;
+  try {
+    const enchantable = itemStack.getComponent("minecraft:enchantable");
+    if (!enchantable) return false;
+    return enchantable.hasEnchantment("silk_touch");
+  } catch {
+    return false;
+  }
+}
+function handleSilkTouchWaypointDelete(player, itemStack, cancelCallback) {
+  if (!(player instanceof Player6) || !player.isValid) return false;
+  if (!hasSilkTouchEnchantment(itemStack)) return false;
+  const currentTick = system4.currentTick;
+  const state = getOrCreatePlayerVirtualNav(player);
+  if (currentTick - state.lastSilkTouchDeleteTick < 10) {
+    cancelCallback?.();
+    return true;
+  }
+  const headLoc = player.getHeadLocation();
+  const viewDir = normalize(player.getViewDirection());
+  const nearbyTarget = getNearbyToggleableWaypoint(player, headLoc, viewDir);
+  if (!nearbyTarget) {
+    return false;
+  }
+  cancelCallback?.();
+  state.lastSilkTouchDeleteTick = currentTick;
+  const targetWp = nearbyTarget.waypoint;
+  const wpPos = { ...targetWp.pos };
+  const dim = player.dimension;
+  const deletedKey = getWaypointKey2(targetWp);
+  deleteWaypoint(dim, targetWp.pos);
+  if (state.pinnedWaypointKey === deletedKey) {
+    state.pinnedWaypointKey = null;
+  }
+  removeWaypointMarker(dim, deletedKey, targetWp.pos);
+  const deletedDisplayName = getWaypointDisplayName(targetWp);
+  try {
+    player.sendMessage(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
+    player.onScreenDisplay.setActionBar(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
+    world6.sendMessage(`\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`);
+  } catch {
+  }
+  system4.run(() => {
+    try {
+      if (player && player.isValid) {
+        player.playSound("random.break", { pitch: 1.2, volume: 1 });
+      }
+      dim.playSound("random.break", wpPos, { pitch: 1.2, volume: 1 });
+    } catch {
+    }
+  });
+  return true;
 }
 
 // src/waypoint/waypoint-utils.ts
@@ -2494,6 +2551,34 @@ function spawnWaypointParticle(options) {
       blue: safeColor.b
     });
     dim.spawnParticle("mining_utility:waypoint_particle", location, molang);
+  } catch (e) {
+  }
+}
+function spawnWaypointBodyParticleForPlayer(options) {
+  const { player, location, color, size, durationTicks, dimension } = options;
+  if (!player || !player.isValid || !location) return;
+  if (dimension) {
+    const dimId = typeof dimension === "string" ? dimension.includes(":") ? dimension : `minecraft:${dimension}` : dimension.id;
+    if (player.dimension.id !== dimId) return;
+  }
+  const lifetimeSeconds = Math.max(0.05, durationTicks / 20);
+  const safeColor = color ?? { r: 1, g: 1, b: 1 };
+  const molang = new MolangVariableMap();
+  molang.setFloat("variable.marker_size", Math.max(0.01, size));
+  molang.setFloat("variable.color.r", safeColor.r);
+  molang.setFloat("variable.color.g", safeColor.g);
+  molang.setFloat("variable.color.b", safeColor.b);
+  molang.setFloat("variable.color_r", safeColor.r);
+  molang.setFloat("variable.color_g", safeColor.g);
+  molang.setFloat("variable.color_b", safeColor.b);
+  molang.setFloat("variable.lifetime", lifetimeSeconds);
+  molang.setColorRGB("variable.color", {
+    red: safeColor.r,
+    green: safeColor.g,
+    blue: safeColor.b
+  });
+  try {
+    player.spawnParticle("mining_utility:waypoint_particle", location, molang);
   } catch (e) {
   }
 }
@@ -2534,6 +2619,10 @@ function displayHUDWaypoints(player) {
   if (!player || !player.isValid) return;
   if (!isPlayerHoldingCompass(player)) return;
   const headLoc = player.getHeadLocation();
+  const viewDir = player.getViewDirection();
+  if (getNearbyToggleableWaypoint(player, headLoc, viewDir)) {
+    return;
+  }
   const dimension = player.dimension;
   const offset = getCurrentVirtualOffset(player);
   const isVirtual = Math.abs(offset.x) > 0.05 || Math.abs(offset.y) > 0.05 || Math.abs(offset.z) > 0.05;
@@ -2557,7 +2646,7 @@ function displayHUDWaypoints(player) {
       const dy = targetY - (originY - 0.5);
       const dz = targetZ - originZ;
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (!isVirtual && dist < 4) continue;
+      if (!isVirtual && dist < WAYPOINT_PROXIMITY_RANGE) continue;
       const safeDist = Math.max(0.1, dist);
       const projDist = HUD_MARKER_CONFIG.projectionDistance;
       const projX = headLoc.x + dx / safeDist * projDist;
@@ -2588,16 +2677,6 @@ function displayHUDWaypoints(player) {
 // src/waypoint/waypoints.ts
 var lastPlacedBannerName = /* @__PURE__ */ new Map();
 var playerBannerColorCache = /* @__PURE__ */ new Map();
-function hasSilkTouchEnchantment(itemStack) {
-  if (!itemStack) return false;
-  try {
-    const enchantable = itemStack.getComponent("minecraft:enchantable");
-    if (!enchantable) return false;
-    return enchantable.hasEnchantment("silk_touch");
-  } catch {
-    return false;
-  }
-}
 function initWaypoints() {
   loadWaypoints();
   system5.runTimeout(() => {
@@ -2639,6 +2718,11 @@ function initWaypoints() {
       });
       return;
     }
+    if (handleSilkTouchWaypointDelete(player, itemStack, () => {
+      event.cancel = true;
+    })) {
+      return;
+    }
     if (itemStack.typeId === "minecraft:banner") {
       if (itemStack.nameTag !== void 0) {
         lastPlacedBannerName.set(player.id, itemStack.nameTag);
@@ -2654,6 +2738,11 @@ function initWaypoints() {
       handleCompassVirtualNav(player, itemStack, () => {
         event.cancel = true;
       });
+      return;
+    }
+    if (handleSilkTouchWaypointDelete(player, itemStack, () => {
+      event.cancel = true;
+    })) {
       return;
     }
     if (itemStack.typeId === "minecraft:banner") {
@@ -2790,17 +2879,32 @@ function initWaypoints() {
   }, 2);
   system5.runInterval(() => {
     try {
-      for (let waypoint of waypointCache) {
-        try {
-          const colorRgb = BANNER_COLOR_RGBS[waypoint.color] ?? { r: 1, g: 1, b: 1 };
-          spawnWaypointParticle({
-            dimension: waypoint.dim,
-            location: waypoint.pos,
-            color: colorRgb,
-            size: 1,
-            durationTicks: 11
-          });
-        } catch {
+      const players = world8.getAllPlayers();
+      if (players.length === 0 || waypointCache.length === 0) return;
+      for (let player of players) {
+        if (!player || !player.isValid) continue;
+        const playerDimId = player.dimension.id;
+        const playerPos = player.location;
+        for (let waypoint of waypointCache) {
+          try {
+            const wpDimId = waypoint.dim.includes(":") ? waypoint.dim : `minecraft:${waypoint.dim}`;
+            if (playerDimId !== wpDimId) continue;
+            const wpKey = getWaypointKey(waypoint);
+            if (isWaypointHiddenForPlayer(player, wpKey)) continue;
+            const dx = waypoint.pos.x - playerPos.x;
+            const dy = waypoint.pos.y - playerPos.y;
+            const dz = waypoint.pos.z - playerPos.z;
+            if (dx * dx + dy * dy + dz * dz > 128 * 128) continue;
+            const colorRgb = BANNER_COLOR_RGBS[waypoint.color] ?? { r: 1, g: 1, b: 1 };
+            spawnWaypointBodyParticleForPlayer({
+              player,
+              location: waypoint.pos,
+              color: colorRgb,
+              size: 1,
+              durationTicks: 11
+            });
+          } catch {
+          }
         }
       }
     } catch {
@@ -2889,7 +2993,9 @@ system6.afterEvents.scriptEventReceive.subscribe((event) => {
 export {
   HUD_GRAY_COLOR,
   HUD_MARKER_CONFIG,
+  PIN_TOGGLE_COOLDOWN_TICKS,
   PRE_STEP_DISTANCE,
+  REMOTE_HIDE_DOUBLE_CLICK_TICKS,
   SPHERE_RADIUS,
   WAYPOINT_MARKER_TAG,
   WAYPOINT_MARKER_TYPE,
@@ -2898,9 +3004,12 @@ export {
   correctWaypointMarkerPositions,
   displayHUDWaypoints,
   findRayClosestWaypoint,
+  formatWaypointHUDText,
   getCurrentVirtualOffset,
   getFocusedWaypoint,
   getLoweredWaypointKeys,
+  getNearbyToggleableWaypoint,
+  getOrCreatePlayerVirtualNav,
   getPinnedWaypointKey,
   getPlayerVirtualNav,
   getRelative8DirectionArrow,
@@ -2909,10 +3018,15 @@ export {
   getWaypointMarkerNameTag,
   handleCompassLeftClick,
   handleCompassVirtualNav,
+  handleSilkTouchWaypointDelete,
+  hasSilkTouchEnchantment,
   isPlayerHoldingCompass,
+  isPlayerZoomed,
   isWaypointHiddenForPlayer,
   removeWaypointMarker,
   setWaypointHiddenForPlayer,
+  showWaypointOperationNotice,
+  spawnWaypointBodyParticleForPlayer,
   spawnWaypointMarker,
   spawnWaypointParticle,
   spawnWaypointParticleForPlayer,

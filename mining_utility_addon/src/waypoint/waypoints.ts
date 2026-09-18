@@ -5,7 +5,10 @@ import {
   Vector3,
   ItemStack,
 } from "@minecraft/server";
-import { displayHUDWaypoints, spawnWaypointParticle } from "./waypoint-utils";
+import {
+  displayHUDWaypoints,
+  spawnWaypointBodyParticleForPlayer,
+} from "./waypoint-utils";
 import {
   addWaypoint,
   deleteWaypoint,
@@ -27,6 +30,9 @@ import {
   handleCompassLeftClick,
   updatePlayerVirtualNavHUD,
   clearPlayerVirtualNav,
+  isWaypointHiddenForPlayer,
+  handleSilkTouchWaypointDelete,
+  hasSilkTouchEnchantment,
 } from "./virtual-nav";
 import {
   spawnWaypointMarker,
@@ -41,20 +47,6 @@ const lastPlacedBannerName = new Map<string, string | null>();
 
 // プレイヤーごとの「最後に持っていた旗の色」を保持するマップ
 const playerBannerColorCache = new Map<string, BannerColorName>();
-
-/**
- * アイテムにシルクタッチのエンチャントが付与されているか判定
- */
-function hasSilkTouchEnchantment(itemStack: ItemStack | undefined): boolean {
-  if (!itemStack) return false;
-  try {
-    const enchantable = itemStack.getComponent("minecraft:enchantable");
-    if (!enchantable) return false;
-    return enchantable.hasEnchantment("silk_touch");
-  } catch {
-    return false;
-  }
-}
 
 export function initWaypoints() {
   // 保存されているウェイポイントを DynamicProperty から復元
@@ -95,7 +87,7 @@ export function initWaypoints() {
     }
   }, 4);
 
-  // 空中でのアイテム使用（コンパス操作・旗の名前キャッシュ）
+  // 空中でのアイテム使用（コンパス操作・シルクタッチ削除・旗の名前キャッシュ）
   world.beforeEvents.itemUse.subscribe((event) => {
     const { source: player, itemStack } = event;
     if (!itemStack) return;
@@ -104,6 +96,15 @@ export function initWaypoints() {
       handleCompassVirtualNav(player, itemStack, () => {
         event.cancel = true;
       });
+      return;
+    }
+
+    // シルクタッチ付きツールでの近接ウェイポイント削除
+    if (
+      handleSilkTouchWaypointDelete(player, itemStack, () => {
+        event.cancel = true;
+      })
+    ) {
       return;
     }
 
@@ -116,7 +117,7 @@ export function initWaypoints() {
     }
   });
 
-  // ブロックに対するアイテム使用・設置（コンパス操作・旗の名前キャッシュ）
+  // ブロックに対するアイテム使用・設置（コンパス操作・シルクタッチ削除・旗の名前キャッシュ）
   world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
     const { player, itemStack } = event;
     if (!itemStack) return;
@@ -125,6 +126,15 @@ export function initWaypoints() {
       handleCompassVirtualNav(player, itemStack, () => {
         event.cancel = true;
       });
+      return;
+    }
+
+    // シルクタッチ付きツールでの近接ウェイポイント削除
+    if (
+      handleSilkTouchWaypointDelete(player, itemStack, () => {
+        event.cancel = true;
+      })
+    ) {
       return;
     }
 
@@ -303,21 +313,45 @@ export function initWaypoints() {
     } catch {}
   }, 2);
 
-  // ウェイポイント実体位置のパーティクル表示（全プレイヤーに見える）
+  // ウェイポイント実体位置のパーティクル表示（非表示にしていないプレイヤーにのみ表示）
   system.runInterval(() => {
     try {
-      for (let waypoint of waypointCache) {
-        try {
-          const colorRgb =
-            BANNER_COLOR_RGBS[waypoint.color] ?? { r: 1, g: 1, b: 1 };
-          spawnWaypointParticle({
-            dimension: waypoint.dim,
-            location: waypoint.pos,
-            color: colorRgb,
-            size: 1,
-            durationTicks: 11,
-          });
-        } catch {}
+      const players = world.getAllPlayers();
+      if (players.length === 0 || waypointCache.length === 0) return;
+
+      for (let player of players) {
+        if (!player || !player.isValid) continue;
+        const playerDimId = player.dimension.id;
+        const playerPos = player.location;
+
+        for (let waypoint of waypointCache) {
+          try {
+            const wpDimId = waypoint.dim.includes(":")
+              ? waypoint.dim
+              : `minecraft:${waypoint.dim}`;
+            if (playerDimId !== wpDimId) continue;
+
+            const wpKey = getWaypointKey(waypoint);
+            // 非表示にしているプレイヤーには実体パーティクルを表示しない
+            if (isWaypointHiddenForPlayer(player, wpKey)) continue;
+
+            // 描画距離外（128m超）は負荷軽減のためスキップ
+            const dx = waypoint.pos.x - playerPos.x;
+            const dy = waypoint.pos.y - playerPos.y;
+            const dz = waypoint.pos.z - playerPos.z;
+            if (dx * dx + dy * dy + dz * dz > 128 * 128) continue;
+
+            const colorRgb =
+              BANNER_COLOR_RGBS[waypoint.color] ?? { r: 1, g: 1, b: 1 };
+            spawnWaypointBodyParticleForPlayer({
+              player,
+              location: waypoint.pos,
+              color: colorRgb,
+              size: 1,
+              durationTicks: 11,
+            });
+          } catch {}
+        }
       }
     } catch {}
   }, 10);
