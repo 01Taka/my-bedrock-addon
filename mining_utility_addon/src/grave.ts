@@ -13,8 +13,136 @@ import {
   PlayerInteractWithBlockBeforeEvent,
   PlayerBreakBlockBeforeEvent,
   Player,
+  Block,
+  Dimension,
 } from "@minecraft/server";
 import { isSettingEnabled, SETTING_KEYS } from "./settings";
+
+function isLava(block: Block | undefined): boolean {
+  if (!block) return false;
+  return (
+    block.typeId === "minecraft:lava" ||
+    block.typeId === "minecraft:flowing_lava"
+  );
+}
+
+/**
+ * アイテムを内部に保持するブロックIDの一覧
+ */
+const CONTAINER_BLOCK_IDS = new Set<string>([
+  "minecraft:chest",
+  "minecraft:trapped_chest",
+  "minecraft:barrel",
+  "minecraft:dispenser",
+  "minecraft:dropper",
+  "minecraft:hopper",
+  "minecraft:crafter",
+  "minecraft:furnace",
+  "minecraft:lit_furnace",
+  "minecraft:blast_furnace",
+  "minecraft:lit_blast_furnace",
+  "minecraft:smoker",
+  "minecraft:lit_smoker",
+  "minecraft:brewing_stand",
+  "minecraft:ender_chest",
+  "minecraft:chiseled_bookshelf",
+  "minecraft:decorated_pot",
+  "minecraft:jukebox",
+  "minecraft:lectern",
+  "minecraft:campfire",
+  "minecraft:soul_campfire",
+  // シュルカーボックス各種
+  "minecraft:shulker_box",
+  "minecraft:undyed_shulker_box",
+  "minecraft:white_shulker_box",
+  "minecraft:orange_shulker_box",
+  "minecraft:magenta_shulker_box",
+  "minecraft:light_blue_shulker_box",
+  "minecraft:yellow_shulker_box",
+  "minecraft:lime_shulker_box",
+  "minecraft:pink_shulker_box",
+  "minecraft:gray_shulker_box",
+  "minecraft:light_gray_shulker_box",
+  "minecraft:cyan_shulker_box",
+  "minecraft:purple_shulker_box",
+  "minecraft:blue_shulker_box",
+  "minecraft:brown_shulker_box",
+  "minecraft:green_shulker_box",
+  "minecraft:red_shulker_box",
+  "minecraft:black_shulker_box",
+]);
+
+/**
+ * ブロックがアイテムを内部に保持するタイプかどうかを判定
+ */
+function isContainerBlock(block: Block | undefined): boolean {
+  if (!block) return false;
+  if (CONTAINER_BLOCK_IDS.has(block.typeId)) return true;
+  if (block.typeId.includes("shulker_box")) return true;
+  try {
+    if (block.getComponent(BlockComponentTypes.Inventory)) return true;
+  } catch (e) {}
+  return false;
+}
+
+const SURROUNDING_8_OFFSETS: [number, number][] = [
+  [0, 1],   // 南
+  [0, -1],  // 北
+  [1, 0],   // 東
+  [-1, 0],  // 西
+  [1, 1],   // 南東
+  [-1, 1],  // 南西
+  [1, -1],  // 北東
+  [-1, -1], // 北西
+];
+
+/**
+ * アイテム保持ブロックを上書きしないように墓石の設置ブロックを探索・解決する
+ */
+function resolveSafeGraveBlock(
+  dimension: Dimension,
+  initialPos: Vector3,
+): Block | undefined {
+  let currX = initialPos.x;
+  let currY = initialPos.y;
+  let currZ = initialPos.z;
+
+  while (currY <= dimension.heightRange.max) {
+    const candidateBlock = dimension.getBlock({ x: currX, y: currY, z: currZ });
+    if (!candidateBlock) {
+      currY++;
+      continue;
+    }
+
+    // アイテム保持ブロックでない場合は、このブロックを採用
+    if (!isContainerBlock(candidateBlock)) {
+      return candidateBlock;
+    }
+
+    // アイテム保持ブロックの場合：生成予定位置のy座標が同じ周囲8マスに空気があればそこに設置
+    let foundAirBlock: Block | undefined;
+    for (const [dx, dz] of SURROUNDING_8_OFFSETS) {
+      const neighbor = dimension.getBlock({
+        x: currX + dx,
+        y: currY,
+        z: currZ + dz,
+      });
+      if (neighbor && neighbor.isAir) {
+        foundAirBlock = neighbor;
+        break;
+      }
+    }
+
+    if (foundAirBlock) {
+      return foundAirBlock;
+    }
+
+    // なければ上の座標に墓を生成しようとする（その位置もアイテムを保持するブロックの場合同じ手順）
+    currY++;
+  }
+
+  return dimension.getBlock(initialPos);
+}
 
 interface GraveData {
   ownerId: string;
@@ -151,6 +279,7 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
   const playerName = player.nameTag || player.id || "Player";
   const playerId = player.id;
 
+  const isVoidDeath = player.location.y < dimension.heightRange.min;
   const basePos: Vector3 = {
     x: Math.floor(player.location.x),
     y: Math.max(Math.floor(player.location.y), dimension.heightRange.min),
@@ -226,9 +355,98 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
 
   system.run(() => {
     try {
-      // 地下の空きY座標を探索（2ブロック分の空きを探す）
+      // 1. 墓石の初期配置候補位置の選定
+      let initialGravePos: Vector3;
+
+      const groundBlock0 = dimension.getBlock(basePos);
+      const groundBlock1 = dimension.getBlock({
+        x: basePos.x,
+        y: Math.min(basePos.y + 1, dimension.heightRange.max),
+        z: basePos.z,
+      });
+
+      if (isVoidDeath) {
+        // 奈落で死亡した場合は、奈落(ブロックが置けない位置)から2マス上（min + 1）に生成
+        initialGravePos = {
+          x: basePos.x,
+          y: dimension.heightRange.min + 1,
+          z: basePos.z,
+        };
+      } else if (isLava(groundBlock0) || isLava(groundBlock1)) {
+        // 溶岩の中で死亡した場合の判定（足元または頭部が溶岩）
+        let lavaTopY = isLava(groundBlock1)
+          ? Math.min(basePos.y + 1, dimension.heightRange.max)
+          : basePos.y;
+
+        // 溶岩がなくなるまで上方向へ探索（表面の溶岩ブロックを特定）
+        while (lavaTopY < dimension.heightRange.max) {
+          const nextBlock = dimension.getBlock({
+            x: basePos.x,
+            y: lavaTopY + 1,
+            z: basePos.z,
+          });
+          if (isLava(nextBlock)) {
+            lavaTopY++;
+          } else {
+            break;
+          }
+        }
+
+        const y1 = Math.min(lavaTopY + 1, dimension.heightRange.max);
+        const y2 = Math.min(lavaTopY + 2, dimension.heightRange.max);
+
+        const block1 = dimension.getBlock({
+          x: basePos.x,
+          y: y1,
+          z: basePos.z,
+        });
+        const block2 = dimension.getBlock({
+          x: basePos.x,
+          y: y2,
+          z: basePos.z,
+        });
+
+        // 溶岩がなくなってから2マス空気があれば2マス目に生成（溶岩表面上2マス目）
+        if (y2 > y1 && block1 && block1.isAir && block2 && block2.isAir) {
+          initialGravePos = { x: basePos.x, y: y2, z: basePos.z };
+        } else {
+          // 溶岩表面にブロックがある場合や空気層が一マスしかない場合、そのブロックを置き換えて溶岩表面上1マス目に生成
+          initialGravePos = { x: basePos.x, y: y1, z: basePos.z };
+        }
+      } else {
+        if (groundBlock0 && groundBlock0.isAir) {
+          initialGravePos = groundBlock0.location;
+        } else if (groundBlock1 && groundBlock1.isAir) {
+          initialGravePos = groundBlock1.location;
+        } else {
+          initialGravePos = basePos;
+        }
+      }
+
+      // アイテム保持ブロックを上書きしないよう安全な墓石設置ブロックを解決
+      const targetGraveBlock =
+        resolveSafeGraveBlock(dimension, initialGravePos) ||
+        dimension.getBlock(initialGravePos);
+      if (!targetGraveBlock) return;
+
+      const finalPos = targetGraveBlock.location;
+      const origGroundType = targetGraveBlock.isAir
+        ? "minecraft:air"
+        : targetGraveBlock.typeId;
+
+      // 2. 地下の空きY座標を探索（2ブロック分の空きを探す、墓石座標との重複およびコンテナブロックの上書きを回避）
       let targetMinY = dimension.heightRange.min + 1;
       while (targetMinY < dimension.heightRange.min + 50) {
+        // 墓石の配置座標と重複するY座標はスキップ
+        const isConflictWithGrave =
+          (finalPos.x === basePos.x && finalPos.y === targetMinY && finalPos.z === basePos.z) ||
+          (finalPos.x === basePos.x + 1 && finalPos.y === targetMinY && finalPos.z === basePos.z);
+
+        if (isConflictWithGrave) {
+          targetMinY++;
+          continue;
+        }
+
         const b1 = dimension.getBlock({
           x: basePos.x,
           y: targetMinY,
@@ -242,10 +460,8 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
         if (
           b1 &&
           b2 &&
-          b1.typeId !== "minecraft:barrel" &&
-          b1.typeId !== "minecraft:chest" &&
-          b2.typeId !== "minecraft:barrel" &&
-          b2.typeId !== "minecraft:chest"
+          !isContainerBlock(b1) &&
+          !isContainerBlock(b2)
         ) {
           break;
         }
@@ -279,7 +495,7 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
       const c1 = c1Comp?.container;
       const c2 = c2Comp?.container;
 
-      // 1. チェストに全アイテムをコピー
+      // 3. チェストに全アイテムをコピー
       let itemIdx = 0;
       if (c1) {
         for (let i = 0; i < c1.size && itemIdx < items.length; i++) {
@@ -292,7 +508,7 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
         }
       }
 
-      // 2. コピー完了後、インベントリおよび装備からアイテムを一斉に削除
+      // 4. コピー完了後、インベントリおよび装備からアイテムを一斉に削除
       if (inv) {
         for (let i = 0; i < inv.size; i++) {
           const item = inv.getItem(i);
@@ -324,57 +540,33 @@ export function handleGraveEntityDie(event: EntityDieAfterEvent): void {
         }
       }
 
-      // 3. モード3かつ死亡時にコンパスを持っていなかった場合はインベントリに新規付与
+      // 5. モード3かつ死亡時にコンパスを持っていなかった場合はインベントリに新規付与
       if (compassMode === 3 && !hasRecoveryCompass) {
         giveRecoveryCompassIfMissing(player);
       }
 
-      // 3. 墓石の設置位置の判定
-      let targetGraveBlock = dimension.getBlock(basePos);
-      let origGroundType = "minecraft:air";
+      // 6. 墓石の設置とデータ保存
+      targetGraveBlock.setType("minecraft:bedrock");
 
-      const groundBlock0 = dimension.getBlock(basePos);
-      const groundBlock1 = dimension.getBlock({
-        x: basePos.x,
-        y: Math.min(basePos.y + 1, dimension.heightRange.max),
-        z: basePos.z,
-      });
+      const graveKey = `grave_${finalPos.x}_${finalPos.y}_${finalPos.z}`;
+      const graveData: GraveData = {
+        ownerId: playerId,
+        ownerName: playerName,
+        dimensionId: dimension.id,
+        allowOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
+        hideX: hidePos1.x,
+        hideY: targetMinY,
+        hideZ: hidePos1.z,
+        origType1: origType1,
+        origType2: origType2,
+        origGroundType: origGroundType,
+      };
 
-      if (groundBlock0 && groundBlock0.isAir) {
-        targetGraveBlock = groundBlock0;
-        origGroundType = "minecraft:air";
-      } else if (groundBlock1 && groundBlock1.isAir) {
-        targetGraveBlock = groundBlock1;
-        origGroundType = "minecraft:air";
-      } else if (groundBlock0) {
-        targetGraveBlock = groundBlock0;
-        origGroundType = groundBlock0.typeId;
-      }
+      world.setDynamicProperty(graveKey, JSON.stringify(graveData));
 
-      if (targetGraveBlock) {
-        const finalPos = targetGraveBlock.location;
-        targetGraveBlock.setType("minecraft:bedrock");
-
-        const graveKey = `grave_${finalPos.x}_${finalPos.y}_${finalPos.z}`;
-        const graveData: GraveData = {
-          ownerId: playerId,
-          ownerName: playerName,
-          dimensionId: dimension.id,
-          allowOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
-          hideX: hidePos1.x,
-          hideY: targetMinY,
-          hideZ: hidePos1.z,
-          origType1: origType1,
-          origType2: origType2,
-          origGroundType: origGroundType,
-        };
-
-        world.setDynamicProperty(graveKey, JSON.stringify(graveData));
-
-        world.sendMessage(
-          `§c${playerName} の墓が生成されました [X: ${finalPos.x}, Y: ${finalPos.y}, Z: ${finalPos.z}]`,
-        );
-      }
+      world.sendMessage(
+        `§c${playerName} の墓が生成されました [X: ${finalPos.x}, Y: ${finalPos.y}, Z: ${finalPos.z}]`,
+      );
     } catch (e) {
       console.error("墓生成エラー: " + e);
     }

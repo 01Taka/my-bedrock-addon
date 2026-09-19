@@ -307,6 +307,112 @@ import {
   ItemStack as ItemStack2,
   Player as Player2
 } from "@minecraft/server";
+function isLava(block) {
+  if (!block) return false;
+  return block.typeId === "minecraft:lava" || block.typeId === "minecraft:flowing_lava";
+}
+var CONTAINER_BLOCK_IDS = /* @__PURE__ */ new Set([
+  "minecraft:chest",
+  "minecraft:trapped_chest",
+  "minecraft:barrel",
+  "minecraft:dispenser",
+  "minecraft:dropper",
+  "minecraft:hopper",
+  "minecraft:crafter",
+  "minecraft:furnace",
+  "minecraft:lit_furnace",
+  "minecraft:blast_furnace",
+  "minecraft:lit_blast_furnace",
+  "minecraft:smoker",
+  "minecraft:lit_smoker",
+  "minecraft:brewing_stand",
+  "minecraft:ender_chest",
+  "minecraft:chiseled_bookshelf",
+  "minecraft:decorated_pot",
+  "minecraft:jukebox",
+  "minecraft:lectern",
+  "minecraft:campfire",
+  "minecraft:soul_campfire",
+  // シュルカーボックス各種
+  "minecraft:shulker_box",
+  "minecraft:undyed_shulker_box",
+  "minecraft:white_shulker_box",
+  "minecraft:orange_shulker_box",
+  "minecraft:magenta_shulker_box",
+  "minecraft:light_blue_shulker_box",
+  "minecraft:yellow_shulker_box",
+  "minecraft:lime_shulker_box",
+  "minecraft:pink_shulker_box",
+  "minecraft:gray_shulker_box",
+  "minecraft:light_gray_shulker_box",
+  "minecraft:cyan_shulker_box",
+  "minecraft:purple_shulker_box",
+  "minecraft:blue_shulker_box",
+  "minecraft:brown_shulker_box",
+  "minecraft:green_shulker_box",
+  "minecraft:red_shulker_box",
+  "minecraft:black_shulker_box"
+]);
+function isContainerBlock(block) {
+  if (!block) return false;
+  if (CONTAINER_BLOCK_IDS.has(block.typeId)) return true;
+  if (block.typeId.includes("shulker_box")) return true;
+  try {
+    if (block.getComponent(BlockComponentTypes.Inventory)) return true;
+  } catch (e) {
+  }
+  return false;
+}
+var SURROUNDING_8_OFFSETS = [
+  [0, 1],
+  // 南
+  [0, -1],
+  // 北
+  [1, 0],
+  // 東
+  [-1, 0],
+  // 西
+  [1, 1],
+  // 南東
+  [-1, 1],
+  // 南西
+  [1, -1],
+  // 北東
+  [-1, -1]
+  // 北西
+];
+function resolveSafeGraveBlock(dimension, initialPos) {
+  let currX = initialPos.x;
+  let currY = initialPos.y;
+  let currZ = initialPos.z;
+  while (currY <= dimension.heightRange.max) {
+    const candidateBlock = dimension.getBlock({ x: currX, y: currY, z: currZ });
+    if (!candidateBlock) {
+      currY++;
+      continue;
+    }
+    if (!isContainerBlock(candidateBlock)) {
+      return candidateBlock;
+    }
+    let foundAirBlock;
+    for (const [dx, dz] of SURROUNDING_8_OFFSETS) {
+      const neighbor = dimension.getBlock({
+        x: currX + dx,
+        y: currY,
+        z: currZ + dz
+      });
+      if (neighbor && neighbor.isAir) {
+        foundAirBlock = neighbor;
+        break;
+      }
+    }
+    if (foundAirBlock) {
+      return foundAirBlock;
+    }
+    currY++;
+  }
+  return dimension.getBlock(initialPos);
+}
 var RECOVERY_COMPASS_SETTING_KEY = "setting_recovery_compass";
 var cachedRecoveryCompassMode;
 function getRecoveryCompassMode() {
@@ -389,6 +495,7 @@ function handleGraveEntityDie(event) {
   const dimension = player.dimension;
   const playerName = player.nameTag || player.id || "Player";
   const playerId = player.id;
+  const isVoidDeath = player.location.y < dimension.heightRange.min;
   const basePos = {
     x: Math.floor(player.location.x),
     y: Math.max(Math.floor(player.location.y), dimension.heightRange.min),
@@ -448,8 +555,70 @@ function handleGraveEntityDie(event) {
   }
   system.run(() => {
     try {
+      let initialGravePos;
+      const groundBlock0 = dimension.getBlock(basePos);
+      const groundBlock1 = dimension.getBlock({
+        x: basePos.x,
+        y: Math.min(basePos.y + 1, dimension.heightRange.max),
+        z: basePos.z
+      });
+      if (isVoidDeath) {
+        initialGravePos = {
+          x: basePos.x,
+          y: dimension.heightRange.min + 1,
+          z: basePos.z
+        };
+      } else if (isLava(groundBlock0) || isLava(groundBlock1)) {
+        let lavaTopY = isLava(groundBlock1) ? Math.min(basePos.y + 1, dimension.heightRange.max) : basePos.y;
+        while (lavaTopY < dimension.heightRange.max) {
+          const nextBlock = dimension.getBlock({
+            x: basePos.x,
+            y: lavaTopY + 1,
+            z: basePos.z
+          });
+          if (isLava(nextBlock)) {
+            lavaTopY++;
+          } else {
+            break;
+          }
+        }
+        const y1 = Math.min(lavaTopY + 1, dimension.heightRange.max);
+        const y2 = Math.min(lavaTopY + 2, dimension.heightRange.max);
+        const block1 = dimension.getBlock({
+          x: basePos.x,
+          y: y1,
+          z: basePos.z
+        });
+        const block2 = dimension.getBlock({
+          x: basePos.x,
+          y: y2,
+          z: basePos.z
+        });
+        if (y2 > y1 && block1 && block1.isAir && block2 && block2.isAir) {
+          initialGravePos = { x: basePos.x, y: y2, z: basePos.z };
+        } else {
+          initialGravePos = { x: basePos.x, y: y1, z: basePos.z };
+        }
+      } else {
+        if (groundBlock0 && groundBlock0.isAir) {
+          initialGravePos = groundBlock0.location;
+        } else if (groundBlock1 && groundBlock1.isAir) {
+          initialGravePos = groundBlock1.location;
+        } else {
+          initialGravePos = basePos;
+        }
+      }
+      const targetGraveBlock = resolveSafeGraveBlock(dimension, initialGravePos) || dimension.getBlock(initialGravePos);
+      if (!targetGraveBlock) return;
+      const finalPos = targetGraveBlock.location;
+      const origGroundType = targetGraveBlock.isAir ? "minecraft:air" : targetGraveBlock.typeId;
       let targetMinY = dimension.heightRange.min + 1;
       while (targetMinY < dimension.heightRange.min + 50) {
+        const isConflictWithGrave = finalPos.x === basePos.x && finalPos.y === targetMinY && finalPos.z === basePos.z || finalPos.x === basePos.x + 1 && finalPos.y === targetMinY && finalPos.z === basePos.z;
+        if (isConflictWithGrave) {
+          targetMinY++;
+          continue;
+        }
         const b1 = dimension.getBlock({
           x: basePos.x,
           y: targetMinY,
@@ -460,7 +629,7 @@ function handleGraveEntityDie(event) {
           y: targetMinY,
           z: basePos.z
         });
-        if (b1 && b2 && b1.typeId !== "minecraft:barrel" && b1.typeId !== "minecraft:chest" && b2.typeId !== "minecraft:barrel" && b2.typeId !== "minecraft:chest") {
+        if (b1 && b2 && !isContainerBlock(b1) && !isContainerBlock(b2)) {
           break;
         }
         targetMinY++;
@@ -518,45 +687,24 @@ function handleGraveEntityDie(event) {
       if (compassMode === 3 && !hasRecoveryCompass) {
         giveRecoveryCompassIfMissing(player);
       }
-      let targetGraveBlock = dimension.getBlock(basePos);
-      let origGroundType = "minecraft:air";
-      const groundBlock0 = dimension.getBlock(basePos);
-      const groundBlock1 = dimension.getBlock({
-        x: basePos.x,
-        y: Math.min(basePos.y + 1, dimension.heightRange.max),
-        z: basePos.z
-      });
-      if (groundBlock0 && groundBlock0.isAir) {
-        targetGraveBlock = groundBlock0;
-        origGroundType = "minecraft:air";
-      } else if (groundBlock1 && groundBlock1.isAir) {
-        targetGraveBlock = groundBlock1;
-        origGroundType = "minecraft:air";
-      } else if (groundBlock0) {
-        targetGraveBlock = groundBlock0;
-        origGroundType = groundBlock0.typeId;
-      }
-      if (targetGraveBlock) {
-        const finalPos = targetGraveBlock.location;
-        targetGraveBlock.setType("minecraft:bedrock");
-        const graveKey = `grave_${finalPos.x}_${finalPos.y}_${finalPos.z}`;
-        const graveData = {
-          ownerId: playerId,
-          ownerName: playerName,
-          dimensionId: dimension.id,
-          allowOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
-          hideX: hidePos1.x,
-          hideY: targetMinY,
-          hideZ: hidePos1.z,
-          origType1,
-          origType2,
-          origGroundType
-        };
-        world.setDynamicProperty(graveKey, JSON.stringify(graveData));
-        world.sendMessage(
-          `\xA7c${playerName} \u306E\u5893\u304C\u751F\u6210\u3055\u308C\u307E\u3057\u305F [X: ${finalPos.x}, Y: ${finalPos.y}, Z: ${finalPos.z}]`
-        );
-      }
+      targetGraveBlock.setType("minecraft:bedrock");
+      const graveKey = `grave_${finalPos.x}_${finalPos.y}_${finalPos.z}`;
+      const graveData = {
+        ownerId: playerId,
+        ownerName: playerName,
+        dimensionId: dimension.id,
+        allowOthers: isSettingEnabled(player, SETTING_KEYS.GRAVE_OTHERS),
+        hideX: hidePos1.x,
+        hideY: targetMinY,
+        hideZ: hidePos1.z,
+        origType1,
+        origType2,
+        origGroundType
+      };
+      world.setDynamicProperty(graveKey, JSON.stringify(graveData));
+      world.sendMessage(
+        `\xA7c${playerName} \u306E\u5893\u304C\u751F\u6210\u3055\u308C\u307E\u3057\u305F [X: ${finalPos.x}, Y: ${finalPos.y}, Z: ${finalPos.z}]`
+      );
     } catch (e) {
       console.error("\u5893\u751F\u6210\u30A8\u30E9\u30FC: " + e);
     }
