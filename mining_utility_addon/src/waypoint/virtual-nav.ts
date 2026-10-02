@@ -165,6 +165,32 @@ export function clearPlayerVirtualNav(playerId: string): void {
 }
 
 /**
+ * プレイヤーのディメンション移動時に固定解除および仮想視点リセットを行う
+ */
+export function handlePlayerDimensionChangeForWaypoints(player: Player): void {
+  const state = playerVirtualNavMap.get(player.id);
+  if (!state) return;
+
+  // 固定を解除
+  state.pinnedWaypointKey = null;
+
+  // 仮想視点（ズーム）のオフセットをリセット
+  state.targetOffset = { x: 0, y: 0, z: 0 };
+  state.startOffset = { x: 0, y: 0, z: 0 };
+
+  // 通知テキストやHUD表示中状態をリセット
+  state.noticeText = null;
+  state.noticeUntilTick = 0;
+
+  if (state.wasShowingHUD) {
+    try {
+      player.onScreenDisplay.setActionBar(" ");
+    } catch {}
+    state.wasShowingHUD = false;
+  }
+}
+
+/**
  * プレイヤーが固定しているウェイポイントキーを取得
  */
 export function getPinnedWaypointKey(player: Player): string | null {
@@ -552,14 +578,14 @@ export function getRelative8DirectionArrow(
   let diffRad = targetYaw - playerYaw;
   let diffDeg = (((((diffRad * 180) / Math.PI) % 360) + 540) % 360) - 180; // -180 ~ +180
 
-  if (diffDeg >= -22.5 && diffDeg < 22.5) return "↑";
-  if (diffDeg >= 22.5 && diffDeg < 67.5) return "↗";
-  if (diffDeg >= 67.5 && diffDeg < 112.5) return "→";
-  if (diffDeg >= 112.5 && diffDeg < 157.5) return "↘";
-  if (diffDeg >= 157.5 || diffDeg < -157.5) return "↓";
-  if (diffDeg >= -157.5 && diffDeg < -112.5) return "↙";
-  if (diffDeg >= -112.5 && diffDeg < -67.5) return "←";
-  return "↖";
+  if (diffDeg >= -22.5 && diffDeg < 22.5) return "^";
+  if (diffDeg >= 22.5 && diffDeg < 67.5) return ">";
+  if (diffDeg >= 67.5 && diffDeg < 112.5) return ">>";
+  if (diffDeg >= 112.5 && diffDeg < 157.5) return ">>>";
+  if (diffDeg >= 157.5 || diffDeg < -157.5) return "v";
+  if (diffDeg >= -157.5 && diffDeg < -112.5) return "<<<";
+  if (diffDeg >= -112.5 && diffDeg < -67.5) return "<<";
+  return "<";
 }
 
 /**
@@ -1243,10 +1269,13 @@ export function updatePlayerVirtualNavHUD(player: Player): void {
         break;
       }
     }
-    // もしキャッシュから消えているか、非表示に設定されていれば固定解除
+    const playerDim = player.dimension.id.replace(/^minecraft:/, "");
+    const wpDim = pinnedWp?.dim.replace(/^minecraft:/, "");
+    // もしキャッシュから消えているか、非表示に設定されているか、別ディメンションの場合は固定解除
     if (
       !pinnedWp ||
-      isWaypointHiddenForPlayer(player, state.pinnedWaypointKey)
+      isWaypointHiddenForPlayer(player, state.pinnedWaypointKey) ||
+      wpDim !== playerDim
     ) {
       state.pinnedWaypointKey = null;
       pinnedWp = null;

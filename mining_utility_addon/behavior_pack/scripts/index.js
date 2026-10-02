@@ -293,7 +293,8 @@ function getEnchantmentLevel(item, enchantment) {
 import {
   world as world2,
   Player as Player3,
-  system as system2
+  system as system2,
+  CommandPermissionLevel
 } from "@minecraft/server";
 import { ModalFormData } from "@minecraft/server-ui";
 
@@ -836,15 +837,18 @@ function getPlayerSettings(_player) {
 }
 function isPlayerAdmin(player) {
   try {
+    if (typeof player.commandPermissionLevel === "number" && player.commandPermissionLevel > CommandPermissionLevel.Any) {
+      return true;
+    }
+  } catch {
+  }
+  try {
     if (typeof player.isOp === "function" && player.isOp()) {
       return true;
     }
   } catch {
   }
   if (player.hasTag("admin") || player.hasTag("op")) {
-    return true;
-  }
-  if (world2.getAllPlayers().length <= 1) {
     return true;
   }
   return false;
@@ -1145,9 +1149,6 @@ function handleSettingsItemUse(event, cancelCallback) {
   const item = event.itemStack;
   if (!item) return;
   if (item.typeId === "minecraft:wooden_sword") {
-    if (!isPlayerAdmin(player)) {
-      return;
-    }
     cancelCallback();
     system2.run(() => {
       showSettingsForm(player);
@@ -2266,6 +2267,22 @@ function clearPlayerVirtualNav(playerId) {
   playerFocusedWaypointMap.delete(playerId);
   playerHiddenWaypointsMap.delete(playerId);
 }
+function handlePlayerDimensionChangeForWaypoints(player) {
+  const state = playerVirtualNavMap.get(player.id);
+  if (!state) return;
+  state.pinnedWaypointKey = null;
+  state.targetOffset = { x: 0, y: 0, z: 0 };
+  state.startOffset = { x: 0, y: 0, z: 0 };
+  state.noticeText = null;
+  state.noticeUntilTick = 0;
+  if (state.wasShowingHUD) {
+    try {
+      player.onScreenDisplay.setActionBar(" ");
+    } catch {
+    }
+    state.wasShowingHUD = false;
+  }
+}
 function getPinnedWaypointKey(player) {
   const state = playerVirtualNavMap.get(player.id);
   return state?.pinnedWaypointKey ?? null;
@@ -2507,14 +2524,14 @@ function getRelative8DirectionArrow(player, targetPos) {
   const targetYaw = Math.atan2(dx, -dz);
   let diffRad = targetYaw - playerYaw;
   let diffDeg = (diffRad * 180 / Math.PI % 360 + 540) % 360 - 180;
-  if (diffDeg >= -22.5 && diffDeg < 22.5) return "\u2191";
-  if (diffDeg >= 22.5 && diffDeg < 67.5) return "\u2197";
-  if (diffDeg >= 67.5 && diffDeg < 112.5) return "\u2192";
-  if (diffDeg >= 112.5 && diffDeg < 157.5) return "\u2198";
-  if (diffDeg >= 157.5 || diffDeg < -157.5) return "\u2193";
-  if (diffDeg >= -157.5 && diffDeg < -112.5) return "\u2199";
-  if (diffDeg >= -112.5 && diffDeg < -67.5) return "\u2190";
-  return "\u2196";
+  if (diffDeg >= -22.5 && diffDeg < 22.5) return "^";
+  if (diffDeg >= 22.5 && diffDeg < 67.5) return ">";
+  if (diffDeg >= 67.5 && diffDeg < 112.5) return ">>";
+  if (diffDeg >= 112.5 && diffDeg < 157.5) return ">>>";
+  if (diffDeg >= 157.5 || diffDeg < -157.5) return "v";
+  if (diffDeg >= -157.5 && diffDeg < -112.5) return "<<<";
+  if (diffDeg >= -112.5 && diffDeg < -67.5) return "<<";
+  return "<";
 }
 function isPlayerZoomed(player) {
   const state = playerVirtualNavMap.get(player.id);
@@ -2961,7 +2978,9 @@ function updatePlayerVirtualNavHUD(player) {
         break;
       }
     }
-    if (!pinnedWp || isWaypointHiddenForPlayer(player, state.pinnedWaypointKey)) {
+    const playerDim = player.dimension.id.replace(/^minecraft:/, "");
+    const wpDim = pinnedWp?.dim.replace(/^minecraft:/, "");
+    if (!pinnedWp || isWaypointHiddenForPlayer(player, state.pinnedWaypointKey) || wpDim !== playerDim) {
       state.pinnedWaypointKey = null;
       pinnedWp = null;
     } else if (pinnedWp.source === "death") {
@@ -3206,7 +3225,9 @@ function displayHUDWaypoints(player) {
     const pinnedWp = waypointCache.find(
       (wp) => getWaypointKey2(wp) === pinnedKey
     );
-    if (pinnedWp && isWaypointVisibleToPlayer(player, pinnedWp, true)) {
+    const playerDim = dimension.id.replace(/^minecraft:/, "");
+    const wpDim = pinnedWp?.dim.replace(/^minecraft:/, "");
+    if (pinnedWp && wpDim === playerDim && isWaypointVisibleToPlayer(player, pinnedWp, true)) {
       isPinnedVisible = true;
     }
   }
@@ -3461,6 +3482,22 @@ function initWaypoints() {
     } catch {
     }
   });
+  try {
+    world8.afterEvents.playerDimensionChange.subscribe((event) => {
+      try {
+        if (event.player && event.player.isValid) {
+          handlePlayerDimensionChangeForWaypoints(event.player);
+        }
+      } catch (err) {
+        console.warn("[Waypoints] playerDimensionChange \u30A8\u30E9\u30FC:", err);
+      }
+    });
+  } catch (e) {
+    console.warn(
+      "[Waypoints] playerDimensionChange \u306E\u767B\u9332\u306B\u5931\u6557\u3057\u307E\u3057\u305F:",
+      e
+    );
+  }
   system6.runInterval(() => {
     try {
       correctWaypointMarkerPositions();
@@ -3706,6 +3743,7 @@ export {
   getWaypointMarkerNameTag,
   handleCompassLeftClick,
   handleCompassVirtualNav,
+  handlePlayerDimensionChangeForWaypoints,
   handleSilkTouchWaypointDelete,
   hasRecoveryCompassInInventory,
   hasSilkTouchEnchantment,

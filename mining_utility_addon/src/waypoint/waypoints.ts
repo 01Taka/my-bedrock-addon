@@ -39,6 +39,7 @@ import {
   isPlayerHoldingRecoveryCompass,
   hasRecoveryCompassInInventory,
   getPlayerVirtualNav,
+  handlePlayerDimensionChangeForWaypoints,
 } from "./virtual-nav";
 import {
   spawnWaypointMarker,
@@ -340,6 +341,24 @@ export function initWaypoints() {
       clearPlayerVirtualNav(event.playerId);
     } catch {}
   });
+
+  // ディメンション移動検知（別ディメンション移動時に固定解除・仮想視点リセット）
+  try {
+    world.afterEvents.playerDimensionChange.subscribe((event) => {
+      try {
+        if (event.player && event.player.isValid) {
+          handlePlayerDimensionChangeForWaypoints(event.player);
+        }
+      } catch (err) {
+        console.warn("[Waypoints] playerDimensionChange エラー:", err);
+      }
+    });
+  } catch (e) {
+    console.warn(
+      "[Waypoints] playerDimensionChange の登録に失敗しました:",
+      e,
+    );
+  }
 
   // プレイヤーが1マス上(Y+1)にいる際の一時降下(Y-1)および位置ズレ補正を2tickごとに更新
   system.runInterval(() => {

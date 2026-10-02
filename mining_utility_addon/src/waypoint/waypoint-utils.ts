@@ -250,7 +250,13 @@ export function displayHUDWaypoints(player: Player) {
     const pinnedWp = waypointCache.find(
       (wp) => getWaypointKey(wp) === pinnedKey,
     );
-    if (pinnedWp && isWaypointVisibleToPlayer(player, pinnedWp, true)) {
+    const playerDim = dimension.id.replace(/^minecraft:/, "");
+    const wpDim = pinnedWp?.dim.replace(/^minecraft:/, "");
+    if (
+      pinnedWp &&
+      wpDim === playerDim &&
+      isWaypointVisibleToPlayer(player, pinnedWp, true)
+    ) {
       isPinnedVisible = true;
     }
   }
