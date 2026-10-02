@@ -4,7 +4,7 @@ import {
   oreMassDestruction,
   treeMassDestruction,
 } from "./mass-destruction";
-import { handleTorchSwap } from "./offhand-touch";
+import "./offhand-touch";
 import {
   handleGraveEntityDie,
   handleGraveBeforeInteract,
@@ -43,12 +43,9 @@ world.afterEvents.playerBreakBlock.subscribe((event) => {
   treeMassDestruction(event);
 });
 
-// アイテム使用 (たいまつ持ち替え / 設定UI表示)
+// アイテム使用 (設定UI表示)
 world.beforeEvents.itemUse.subscribe((event) => {
   handleSettingsItemUse(event, () => {
-    event.cancel = true;
-  });
-  handleTorchSwap(event.source, () => {
     event.cancel = true;
   });
 });
