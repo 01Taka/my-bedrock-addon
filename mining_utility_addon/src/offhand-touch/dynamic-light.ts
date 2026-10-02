@@ -7,6 +7,9 @@ import {
   placeLight,
   removeLight,
   clearPreviousLight,
+  clearAllLights,
+  saveActiveLights,
+  restoreAndClearSavedLights,
   isAirOrLightBlock,
 } from "./light-block-manager";
 import {
@@ -29,7 +32,7 @@ system.runInterval(() => {
     // オフハンドたいまつ機能が無効な場合
     if (!isSettingEnabled(player, SETTING_KEYS.TORCH)) {
       if (activeLights.has(playerId)) {
-        clearPreviousLight(playerId);
+        clearPreviousLight(playerId, player);
       }
       continue;
     }
@@ -39,7 +42,7 @@ system.runInterval(() => {
     // たいまつを持っていない場合
     if (!torchInfo) {
       if (activeLights.has(playerId)) {
-        clearPreviousLight(playerId);
+        clearPreviousLight(playerId, player);
       }
       continue;
     }
@@ -52,7 +55,7 @@ system.runInterval(() => {
       prev &&
       (prev.level !== torchInfo.level || prev.dimensionId !== dimension.id)
     ) {
-      clearPreviousLight(playerId);
+      clearPreviousLight(playerId, player);
     }
 
     // 新たに配置したいターゲット座標のリスト
@@ -85,7 +88,7 @@ system.runInterval(() => {
     // 配置できる場所が1つもない場合
     if (newTargetLocations.length === 0) {
       if (activeLights.has(playerId)) {
-        clearPreviousLight(playerId);
+        clearPreviousLight(playerId, player);
       }
       continue;
     }
@@ -124,28 +127,44 @@ system.runInterval(() => {
     }
 
     // activeLightsの更新（明るさレベルも含めて保存）
-    activeLights.set(playerId, {
+    const lightData = {
       dimensionId: dimension.id,
       level: torchInfo.level,
       locations: finalizedLocations,
-    });
+    };
+    activeLights.set(playerId, lightData);
+    saveActiveLights(player, lightData);
   }
 }, 2);
 
 // ==========================================
-// 残留防止イベントリスナー（即時消去）
+// 残留防止イベントリスナー（即時消去＆復元時クリーンアップ）
 // ==========================================
 
 world.afterEvents.entityDie.subscribe((event) => {
   if (event.deadEntity instanceof Player) {
-    clearPreviousLight(event.deadEntity.id);
+    clearPreviousLight(event.deadEntity.id, event.deadEntity);
   }
 });
 
 world.afterEvents.playerDimensionChange.subscribe((event) => {
-  clearPreviousLight(event.player.id);
+  clearPreviousLight(event.player.id, event.player);
 });
 
 world.afterEvents.playerLeave.subscribe((event) => {
   clearPreviousLight(event.playerId);
+
+  // ワールド内に残っているプレイヤーがいない場合（シングルプレイ退出時等）、全ライトを一括強制クリーンアップ
+  if (world.getAllPlayers().length === 0) {
+    clearAllLights();
+  }
 });
+
+world.afterEvents.playerSpawn.subscribe((event) => {
+  system.run(() => {
+    if (event.player?.isValid) {
+      restoreAndClearSavedLights(event.player);
+    }
+  });
+});
+

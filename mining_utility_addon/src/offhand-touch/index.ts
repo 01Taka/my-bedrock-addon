@@ -3,3 +3,7 @@ export * from "./light-block-manager";
 export * from "./light-position-finder";
 export * from "./dynamic-light";
 export * from "./torch-swap";
+export * from "./face-collision";
+export * from "./interact-action-checker";
+export * from "./torch-support-validator";
+export * from "./torch-placement";

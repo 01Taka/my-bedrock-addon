@@ -1,5 +1,5 @@
 // src/index.ts
-import { world as world12, system as system8 } from "@minecraft/server";
+import { world as world13, system as system9 } from "@minecraft/server";
 
 // ../node_modules/@minecraft/math/lib/src/general/clamp.js
 function clampNumber(val, min, max) {
@@ -1474,6 +1474,7 @@ var TORCH_LIGHT_LEVELS = {
   // レッドストーンたいまつ
 };
 var SWAP_COOLDOWN_TICKS = 7;
+var TORCH_SAVED_LIGHTS_PROP = "torch_saved_lights";
 
 // src/offhand-touch/light-block-manager.ts
 import {
@@ -1518,9 +1519,6 @@ function placeLight(dimension, position, level) {
     const block = dimension.getBlock(position);
     if (!block || !isAirOrLightBlock(block.typeId)) return false;
     const key = getLightPosKey(dimension.id, position);
-    if (isLightBlock(block.typeId) && !addonPlacedLights.has(key)) {
-      return false;
-    }
     const lightPermutation = BlockPermutation.resolve("minecraft:light_block", {
       block_light_level: level
     });
@@ -1533,9 +1531,6 @@ function placeLight(dimension, position, level) {
 }
 function removeLight(dimension, position, playerId) {
   const key = getLightPosKey(dimension.id, position);
-  if (!addonPlacedLights.has(key)) {
-    return;
-  }
   if (playerId && isLightNeededByOtherPlayers(playerId, dimension.id, position)) {
     return;
   }
@@ -1548,7 +1543,7 @@ function removeLight(dimension, position, playerId) {
   } catch (e) {
   }
 }
-function clearPreviousLight(playerId) {
+function clearPreviousLight(playerId, player) {
   const previous = activeLights.get(playerId);
   if (!previous) return;
   try {
@@ -1559,6 +1554,85 @@ function clearPreviousLight(playerId) {
   } catch (e) {
   }
   activeLights.delete(playerId);
+  if (player) {
+    saveActiveLights(player, void 0);
+  }
+}
+function clearAllLights() {
+  for (const [playerId, lightData] of activeLights.entries()) {
+    try {
+      const dimension = world3.getDimension(lightData.dimensionId);
+      for (const pos of lightData.locations) {
+        removeLight(dimension, pos, playerId);
+      }
+    } catch {
+    }
+  }
+  activeLights.clear();
+  for (const key of addonPlacedLights) {
+    try {
+      const [dimensionId, coords] = key.split("@");
+      const [x, y, z] = coords.split(",").map(Number);
+      const dimension = world3.getDimension(dimensionId);
+      const block = dimension.getBlock({ x, y, z });
+      if (block && isLightBlock(block.typeId)) {
+        block.setType("minecraft:air");
+      }
+    } catch {
+    }
+  }
+  addonPlacedLights.clear();
+}
+function saveActiveLights(player, data) {
+  try {
+    if (data && data.locations.length > 0) {
+      player.setDynamicProperty(TORCH_SAVED_LIGHTS_PROP, JSON.stringify(data));
+    } else {
+      player.setDynamicProperty(TORCH_SAVED_LIGHTS_PROP, void 0);
+    }
+  } catch (e) {
+  }
+}
+function restoreAndClearSavedLights(player) {
+  try {
+    const raw = player.getDynamicProperty(TORCH_SAVED_LIGHTS_PROP);
+    if (typeof raw === "string") {
+      try {
+        const savedData = JSON.parse(raw);
+        if (savedData && savedData.dimensionId && Array.isArray(savedData.locations)) {
+          const dimension2 = world3.getDimension(savedData.dimensionId);
+          for (const pos of savedData.locations) {
+            try {
+              const block = dimension2.getBlock(pos);
+              if (block && isLightBlock(block.typeId)) {
+                block.setType("minecraft:air");
+              }
+              const key = getLightPosKey(savedData.dimensionId, pos);
+              addonPlacedLights.delete(key);
+            } catch {
+            }
+          }
+        }
+      } catch {
+      }
+      player.setDynamicProperty(TORCH_SAVED_LIGHTS_PROP, void 0);
+    }
+    const footPos = Vector3Utils.floor(player.location);
+    const headPos = { x: footPos.x, y: footPos.y + 1, z: footPos.z };
+    const dimension = player.dimension;
+    for (const pos of [footPos, headPos]) {
+      try {
+        const block = dimension.getBlock(pos);
+        if (block && isLightBlock(block.typeId)) {
+          block.setType("minecraft:air");
+          const key = getLightPosKey(dimension.id, pos);
+          addonPlacedLights.delete(key);
+        }
+      } catch {
+      }
+    }
+  } catch (e) {
+  }
 }
 
 // src/offhand-touch/light-position-finder.ts
@@ -1618,21 +1692,21 @@ system4.runInterval(() => {
     }
     if (!isSettingEnabled(player, SETTING_KEYS.TORCH)) {
       if (activeLights.has(playerId)) {
-        clearPreviousLight(playerId);
+        clearPreviousLight(playerId, player);
       }
       continue;
     }
     const torchInfo = getOffhandTorchLightLevel(player);
     if (!torchInfo) {
       if (activeLights.has(playerId)) {
-        clearPreviousLight(playerId);
+        clearPreviousLight(playerId, player);
       }
       continue;
     }
     const prev = activeLights.get(playerId);
     const dimension = player.dimension;
     if (prev && (prev.level !== torchInfo.level || prev.dimensionId !== dimension.id)) {
-      clearPreviousLight(playerId);
+      clearPreviousLight(playerId, player);
     }
     const newTargetLocations = [];
     const suitablePos = findSuitableLightPosition(player);
@@ -1654,7 +1728,7 @@ system4.runInterval(() => {
     }
     if (newTargetLocations.length === 0) {
       if (activeLights.has(playerId)) {
-        clearPreviousLight(playerId);
+        clearPreviousLight(playerId, player);
       }
       continue;
     }
@@ -1682,23 +1756,35 @@ system4.runInterval(() => {
         }
       }
     }
-    activeLights.set(playerId, {
+    const lightData = {
       dimensionId: dimension.id,
       level: torchInfo.level,
       locations: finalizedLocations
-    });
+    };
+    activeLights.set(playerId, lightData);
+    saveActiveLights(player, lightData);
   }
 }, 2);
 world4.afterEvents.entityDie.subscribe((event) => {
   if (event.deadEntity instanceof Player7) {
-    clearPreviousLight(event.deadEntity.id);
+    clearPreviousLight(event.deadEntity.id, event.deadEntity);
   }
 });
 world4.afterEvents.playerDimensionChange.subscribe((event) => {
-  clearPreviousLight(event.player.id);
+  clearPreviousLight(event.player.id, event.player);
 });
 world4.afterEvents.playerLeave.subscribe((event) => {
   clearPreviousLight(event.playerId);
+  if (world4.getAllPlayers().length === 0) {
+    clearAllLights();
+  }
+});
+world4.afterEvents.playerSpawn.subscribe((event) => {
+  system4.run(() => {
+    if (event.player?.isValid) {
+      restoreAndClearSavedLights(event.player);
+    }
+  });
 });
 
 // src/offhand-touch/torch-swap.ts
@@ -1716,17 +1802,38 @@ function handleTorchSwap(player, cancelCallback) {
   if (!equippable) return;
   const mainhandItem = equippable.getEquipment(EquipmentSlot5.Mainhand);
   const offhandItem = equippable.getEquipment(EquipmentSlot5.Offhand);
-  if (mainhandItem && mainhandItem.typeId in TORCH_LIGHT_LEVELS && !offhandItem) {
-    lastTorchSwapTick.set(player.id, currentTick);
-    cancelCallback?.();
-    system5.run(() => {
-      player.runCommand(
-        `replaceitem entity @s slot.weapon.offhand 0 ${mainhandItem.typeId} ${mainhandItem.amount}`
-      );
-      equippable.setEquipment(EquipmentSlot5.Mainhand, void 0);
-    });
+  if (!mainhandItem || !(mainhandItem.typeId in TORCH_LIGHT_LEVELS)) {
     return;
   }
+  const isOffhandEmpty = !offhandItem;
+  const isSameTorch = offhandItem && offhandItem.typeId === mainhandItem.typeId;
+  if (!isOffhandEmpty && !isSameTorch) {
+    return;
+  }
+  const currentOffhandAmount = isOffhandEmpty ? 0 : offhandItem.amount;
+  if (currentOffhandAmount >= 64) {
+    return;
+  }
+  const spaceInOffhand = 64 - currentOffhandAmount;
+  const transferAmount = Math.min(spaceInOffhand, mainhandItem.amount);
+  if (transferAmount <= 0) {
+    return;
+  }
+  const newOffhandAmount = currentOffhandAmount + transferAmount;
+  const remainingMainhandAmount = mainhandItem.amount - transferAmount;
+  lastTorchSwapTick.set(player.id, currentTick);
+  cancelCallback?.();
+  system5.run(() => {
+    player.runCommand(
+      `replaceitem entity @s slot.weapon.offhand 0 ${mainhandItem.typeId} ${newOffhandAmount}`
+    );
+    if (remainingMainhandAmount > 0) {
+      mainhandItem.amount = remainingMainhandAmount;
+      equippable.setEquipment(EquipmentSlot5.Mainhand, mainhandItem);
+    } else {
+      equippable.setEquipment(EquipmentSlot5.Mainhand, void 0);
+    }
+  });
 }
 world5.afterEvents.playerSwingStart.subscribe((event) => {
   if (event.player) {
@@ -1737,22 +1844,455 @@ world5.afterEvents.playerLeave.subscribe((event) => {
   lastTorchSwapTick.delete(event.playerId);
 });
 
+// src/offhand-touch/face-collision.ts
+import {
+  Direction as Direction2
+} from "@minecraft/server";
+function getAdjacentBlock(block, face) {
+  switch (face) {
+    case Direction2.Up:
+      return block.above();
+    case Direction2.Down:
+      return block.below();
+    case Direction2.North:
+      return block.north();
+    case Direction2.South:
+      return block.south();
+    case Direction2.East:
+      return block.east();
+    case Direction2.West:
+      return block.west();
+    default:
+      return void 0;
+  }
+}
+function getFaceRayDefinitions(block, face, isCornerMode) {
+  const { x, y, z } = block.location;
+  const OFFSET = 0.05;
+  const C_MIN = 0.15;
+  const C_MAX = 0.85;
+  const MAX_DIST = 1.1;
+  switch (face) {
+    case Direction2.Up: {
+      const dir = { x: 0, y: -1, z: 0 };
+      const startY = y + 1 + OFFSET;
+      if (!isCornerMode) {
+        return [
+          {
+            name: "Center",
+            startLocation: { x: x + 0.5, y: startY, z: z + 0.5 },
+            direction: dir,
+            maxDistance: MAX_DIST
+          }
+        ];
+      }
+      return [
+        {
+          name: "Corner 1 (NW)",
+          startLocation: { x: x + C_MIN, y: startY, z: z + C_MIN },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 2 (NE)",
+          startLocation: { x: x + C_MAX, y: startY, z: z + C_MIN },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 3 (SW)",
+          startLocation: { x: x + C_MIN, y: startY, z: z + C_MAX },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 4 (SE)",
+          startLocation: { x: x + C_MAX, y: startY, z: z + C_MAX },
+          direction: dir,
+          maxDistance: MAX_DIST
+        }
+      ];
+    }
+    case Direction2.Down: {
+      const dir = { x: 0, y: 1, z: 0 };
+      const startY = y - OFFSET;
+      if (!isCornerMode) {
+        return [
+          {
+            name: "Center",
+            startLocation: { x: x + 0.5, y: startY, z: z + 0.5 },
+            direction: dir,
+            maxDistance: MAX_DIST
+          }
+        ];
+      }
+      return [
+        {
+          name: "Corner 1 (NW)",
+          startLocation: { x: x + C_MIN, y: startY, z: z + C_MIN },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 2 (NE)",
+          startLocation: { x: x + C_MAX, y: startY, z: z + C_MIN },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 3 (SW)",
+          startLocation: { x: x + C_MIN, y: startY, z: z + C_MAX },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 4 (SE)",
+          startLocation: { x: x + C_MAX, y: startY, z: z + C_MAX },
+          direction: dir,
+          maxDistance: MAX_DIST
+        }
+      ];
+    }
+    case Direction2.North: {
+      const dir = { x: 0, y: 0, z: 1 };
+      const startZ = z - OFFSET;
+      if (!isCornerMode) {
+        return [
+          {
+            name: "Center",
+            startLocation: { x: x + 0.5, y: y + 0.5, z: startZ },
+            direction: dir,
+            maxDistance: MAX_DIST
+          }
+        ];
+      }
+      return [
+        {
+          name: "Corner 1 (BottomLeft)",
+          startLocation: { x: x + C_MIN, y: y + C_MIN, z: startZ },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 2 (BottomRight)",
+          startLocation: { x: x + C_MAX, y: y + C_MIN, z: startZ },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 3 (TopLeft)",
+          startLocation: { x: x + C_MIN, y: y + C_MAX, z: startZ },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 4 (TopRight)",
+          startLocation: { x: x + C_MAX, y: y + C_MAX, z: startZ },
+          direction: dir,
+          maxDistance: MAX_DIST
+        }
+      ];
+    }
+    case Direction2.South: {
+      const dir = { x: 0, y: 0, z: -1 };
+      const startZ = z + 1 + OFFSET;
+      if (!isCornerMode) {
+        return [
+          {
+            name: "Center",
+            startLocation: { x: x + 0.5, y: y + 0.5, z: startZ },
+            direction: dir,
+            maxDistance: MAX_DIST
+          }
+        ];
+      }
+      return [
+        {
+          name: "Corner 1 (BottomLeft)",
+          startLocation: { x: x + C_MIN, y: y + C_MIN, z: startZ },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 2 (BottomRight)",
+          startLocation: { x: x + C_MAX, y: y + C_MIN, z: startZ },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 3 (TopLeft)",
+          startLocation: { x: x + C_MIN, y: y + C_MAX, z: startZ },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 4 (TopRight)",
+          startLocation: { x: x + C_MAX, y: y + C_MAX, z: startZ },
+          direction: dir,
+          maxDistance: MAX_DIST
+        }
+      ];
+    }
+    case Direction2.West: {
+      const dir = { x: 1, y: 0, z: 0 };
+      const startX = x - OFFSET;
+      if (!isCornerMode) {
+        return [
+          {
+            name: "Center",
+            startLocation: { x: startX, y: y + 0.5, z: z + 0.5 },
+            direction: dir,
+            maxDistance: MAX_DIST
+          }
+        ];
+      }
+      return [
+        {
+          name: "Corner 1 (BottomNorth)",
+          startLocation: { x: startX, y: y + C_MIN, z: z + C_MIN },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 2 (BottomSouth)",
+          startLocation: { x: startX, y: y + C_MIN, z: z + C_MAX },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 3 (TopNorth)",
+          startLocation: { x: startX, y: y + C_MAX, z: z + C_MIN },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 4 (TopSouth)",
+          startLocation: { x: startX, y: y + C_MAX, z: z + C_MAX },
+          direction: dir,
+          maxDistance: MAX_DIST
+        }
+      ];
+    }
+    case Direction2.East: {
+      const dir = { x: -1, y: 0, z: 0 };
+      const startX = x + 1 + OFFSET;
+      if (!isCornerMode) {
+        return [
+          {
+            name: "Center",
+            startLocation: { x: startX, y: y + 0.5, z: z + 0.5 },
+            direction: dir,
+            maxDistance: MAX_DIST
+          }
+        ];
+      }
+      return [
+        {
+          name: "Corner 1 (BottomNorth)",
+          startLocation: { x: startX, y: y + C_MIN, z: z + C_MIN },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 2 (BottomSouth)",
+          startLocation: { x: startX, y: y + C_MIN, z: z + C_MAX },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 3 (TopNorth)",
+          startLocation: { x: startX, y: y + C_MAX, z: z + C_MIN },
+          direction: dir,
+          maxDistance: MAX_DIST
+        },
+        {
+          name: "Corner 4 (TopSouth)",
+          startLocation: { x: startX, y: y + C_MAX, z: z + C_MAX },
+          direction: dir,
+          maxDistance: MAX_DIST
+        }
+      ];
+    }
+    default:
+      return [];
+  }
+}
+function hasBlockCollisionFromFace(block, face) {
+  if (!block || block.isAir || block.isLiquid) {
+    return false;
+  }
+  const adjacentBlock = getAdjacentBlock(block, face);
+  const isAdjacentAir = adjacentBlock ? adjacentBlock.isAir : true;
+  const isCornerMode = !isAdjacentAir;
+  const rayDefs = getFaceRayDefinitions(block, face, isCornerMode);
+  const { x, y, z } = block.location;
+  const options = {
+    maxDistance: 1.1,
+    includePassableBlocks: false,
+    // 草・花・松明などのすり抜け可能ブロックは除外
+    includeLiquidBlocks: false
+    // 水や溶岩も除外
+  };
+  for (const ray of rayDefs) {
+    const hit = block.dimension.getBlockFromRay(
+      ray.startLocation,
+      ray.direction,
+      options
+    );
+    if (hit !== void 0 && hit.block.location.x === x && hit.block.location.y === y && hit.block.location.z === z) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// src/offhand-touch/interact-action-checker.ts
+function isInteractiveBlock(block) {
+  const typeId = block.typeId;
+  return typeId.includes("chest") || typeId.includes("shulker_box") || typeId.includes("barrel") || typeId.includes("furnace") || typeId.includes("smoker") || typeId.includes("table") || // crafting_table, smithing_table, cartography_table, etc.
+  typeId.includes("anvil") || typeId.includes("door") || typeId.includes("gate") || typeId.includes("button") || typeId.includes("lever") || typeId.includes("bed") || typeId.includes("hopper") || typeId.includes("dispenser") || typeId.includes("dropper") || typeId.includes("lectern") || typeId.includes("cauldron") || typeId.includes("brewing_stand") || typeId.includes("bell") || typeId.includes("beacon") || typeId.includes("respawn_anchor") || typeId.includes("jukebox") || typeId.includes("note_block") || typeId.includes("grindstone") || typeId.includes("stonecutter") || typeId.includes("loom") || typeId.includes("crafter") || typeId.includes("daylight_detector") || typeId.includes("repeater") || typeId.includes("comparator");
+}
+function isAllowedMainhandItem(itemStack) {
+  if (!itemStack) return true;
+  const typeId = itemStack.typeId;
+  return typeId.endsWith("_sword") || typeId.endsWith("_pickaxe");
+}
+
+// src/offhand-touch/torch-support-validator.ts
+import { Direction as Direction3 } from "@minecraft/server";
+function isNonSupportingBlock(block) {
+  if (block.isAir || block.isLiquid) return true;
+  const typeId = block.typeId;
+  return typeId.includes("leaves") || typeId.includes("sign") || typeId.includes("torch") || typeId.includes("lantern") || typeId.includes("carpet") || // isInteractiveBlock のうちたいまつが支えられないもの
+  typeId.includes("chest") || typeId.includes("door") || typeId.includes("gate") || typeId.includes("button") || typeId.includes("lever") || typeId.includes("bed") || typeId.includes("anvil") || typeId.includes("hopper") || typeId.includes("cauldron") || typeId.includes("brewing_stand") || typeId.includes("lectern") || typeId.includes("bell") || typeId.includes("grindstone") || typeId.includes("stonecutter") || typeId.includes("daylight_detector") || typeId.includes("repeater") || typeId.includes("comparator");
+}
+function isFullBlockFace(block, face) {
+  if (face === Direction3.Down) return false;
+  if (isNonSupportingBlock(block)) return false;
+  return hasBlockCollisionFromFace(block, face);
+}
+function isReplaceableForTorch(typeId) {
+  if (isAirOrLightBlock(typeId)) return true;
+  return (
+    // 背の低い草
+    typeId === "minecraft:short_grass" || typeId === "minecraft:tallgrass" || typeId === "minecraft:fern" || // 背の高い草
+    typeId === "minecraft:tall_grass" || typeId === "minecraft:double_plant" || typeId === "minecraft:large_fern" || // 落ち葉
+    typeId === "minecraft:leaf_litter" || typeId === "minecraft:pink_petals"
+  );
+}
+
+// src/offhand-touch/torch-placement.ts
+import {
+  world as world6,
+  system as system6,
+  Direction as Direction4,
+  EquipmentSlot as EquipmentSlot6,
+  BlockPermutation as BlockPermutation2,
+  GameMode as GameMode2
+} from "@minecraft/server";
+var faceOffsets2 = {
+  [Direction4.Up]: { x: 0, y: 1, z: 0 },
+  [Direction4.Down]: { x: 0, y: -1, z: 0 },
+  [Direction4.North]: { x: 0, y: 0, z: -1 },
+  [Direction4.South]: { x: 0, y: 0, z: 1 },
+  [Direction4.East]: { x: 1, y: 0, z: 0 },
+  [Direction4.West]: { x: -1, y: 0, z: 0 }
+};
+var facingMap = {
+  [Direction4.Up]: "top",
+  [Direction4.North]: "south",
+  [Direction4.South]: "north",
+  [Direction4.East]: "west",
+  [Direction4.West]: "east"
+};
+var lastTorchPlaceTick = /* @__PURE__ */ new Map();
+var PLACE_COOLDOWN_TICKS = 4;
+function handleTorchPlaceOnInteract(event) {
+  const { player, block, itemStack, isFirstEvent } = event;
+  if (!isFirstEvent) return;
+  if (!isSettingEnabled(player, SETTING_KEYS.TORCH)) return;
+  const currentTick = system6.currentTick;
+  const lastTick = lastTorchPlaceTick.get(player.id) ?? 0;
+  if (currentTick - lastTick < PLACE_COOLDOWN_TICKS) return;
+  const equippable = player.getComponent("minecraft:equippable");
+  if (!equippable) return;
+  const offhandItem = equippable.getEquipment(EquipmentSlot6.Offhand);
+  if (!offhandItem || !(offhandItem.typeId in TORCH_LIGHT_LEVELS)) return;
+  if (!player.isSneaking && isInteractiveBlock(block)) {
+    return;
+  }
+  if (!isAllowedMainhandItem(itemStack)) {
+    return;
+  }
+  const hit = player.getBlockFromViewDirection({
+    maxDistance: 7,
+    includeLiquidBlocks: false,
+    includePassableBlocks: false
+  });
+  if (!hit) return;
+  const hitBlock = hit.block;
+  const hitFace = hit.face;
+  if (!isFullBlockFace(hitBlock, hitFace)) {
+    return;
+  }
+  const offset = faceOffsets2[hitFace];
+  const placeLocation = Vector3Utils.add(hitBlock.location, offset);
+  const adjacentBlock = player.dimension.getBlock(placeLocation);
+  if (!adjacentBlock || !isReplaceableForTorch(adjacentBlock.typeId)) {
+    return;
+  }
+  const facing = facingMap[hitFace];
+  if (!facing) return;
+  event.cancel = true;
+  lastTorchPlaceTick.set(player.id, currentTick);
+  system6.run(() => {
+    try {
+      const torchPermutation = BlockPermutation2.resolve(offhandItem.typeId, {
+        torch_facing_direction: facing
+      });
+      adjacentBlock.setPermutation(torchPermutation);
+      const lightKey = getLightPosKey(player.dimension.id, placeLocation);
+      if (addonPlacedLights.has(lightKey)) {
+        addonPlacedLights.delete(lightKey);
+      }
+      player.dimension.playSound("dig.wood", placeLocation, {
+        volume: 1,
+        pitch: 0.8
+      });
+      if (player.getGameMode() !== GameMode2.Creative) {
+        if (offhandItem.amount > 1) {
+          player.runCommand(
+            `replaceitem entity @s slot.weapon.offhand 0 ${offhandItem.typeId} ${offhandItem.amount - 1}`
+          );
+        } else {
+          player.runCommand(`replaceitem entity @s slot.weapon.offhand 0 air`);
+        }
+      }
+    } catch (e) {
+      console.warn("[Torch] \u305F\u3044\u307E\u3064\u306E\u8A2D\u7F6E\u306B\u5931\u6557\u3057\u307E\u3057\u305F:", e);
+    }
+  });
+}
+world6.afterEvents.playerLeave.subscribe((event) => {
+  lastTorchPlaceTick.delete(event.playerId);
+});
+
 // src/waypoint/waypoints.ts
 import {
-  world as world10,
-  system as system7,
-  EquipmentSlot as EquipmentSlot7,
+  world as world11,
+  system as system8,
+  EquipmentSlot as EquipmentSlot8,
   Player as Player11
 } from "@minecraft/server";
 
 // src/waypoint/waypoint-utils.ts
 import {
-  world as world9,
+  world as world10,
   MolangVariableMap
 } from "@minecraft/server";
 
 // src/waypoint/store-waypoint.ts
-import { world as world6 } from "@minecraft/server";
+import { world as world7 } from "@minecraft/server";
 var WP_PREFIX = "wp:";
 var LEGACY_STORAGE_KEY = "waypoints";
 var waypoints = /* @__PURE__ */ new Map();
@@ -1789,7 +2329,7 @@ function isWaypoint(value) {
 function loadWaypoints() {
   waypoints.clear();
   try {
-    const legacyRaw = world6.getDynamicProperty(LEGACY_STORAGE_KEY);
+    const legacyRaw = world7.getDynamicProperty(LEGACY_STORAGE_KEY);
     if (typeof legacyRaw === "string") {
       const parsed = JSON.parse(legacyRaw);
       if (typeof parsed === "object" && parsed !== null) {
@@ -1797,23 +2337,23 @@ function loadWaypoints() {
           if (isWaypoint(value)) {
             waypoints.set(key, value);
             try {
-              world6.setDynamicProperty(`${WP_PREFIX}${key}`, JSON.stringify(value));
+              world7.setDynamicProperty(`${WP_PREFIX}${key}`, JSON.stringify(value));
             } catch {
             }
           }
         }
       }
-      world6.setDynamicProperty(LEGACY_STORAGE_KEY, void 0);
+      world7.setDynamicProperty(LEGACY_STORAGE_KEY, void 0);
       console.warn(`[Waypoints] \u65E7\u5F62\u5F0F\u30C7\u30FC\u30BF\u304B\u3089 ${waypoints.size} \u4EF6\u3092\u500B\u5225\u30AD\u30FC\u3078\u6B63\u5E38\u79FB\u884C\u3057\u307E\u3057\u305F\u3002`);
     }
   } catch (e) {
     console.warn(`[Waypoints] \u30EC\u30AC\u30B7\u30FC\u30C7\u30FC\u30BF\u79FB\u884C\u51E6\u7406\u30A8\u30E9\u30FC:`, e);
   }
   try {
-    const allPropIds = world6.getDynamicPropertyIds();
+    const allPropIds = world7.getDynamicPropertyIds();
     for (const propId of allPropIds) {
       if (propId.startsWith(WP_PREFIX)) {
-        const raw = world6.getDynamicProperty(propId);
+        const raw = world7.getDynamicProperty(propId);
         if (typeof raw === "string") {
           try {
             const parsed = JSON.parse(raw);
@@ -1852,7 +2392,7 @@ function addWaypoint(dimension, location, color, name, creatorId, createdAt, sou
   waypoints.set(id, newWaypoint);
   updateCache();
   try {
-    world6.setDynamicProperty(`${WP_PREFIX}${id}`, JSON.stringify(newWaypoint));
+    world7.setDynamicProperty(`${WP_PREFIX}${id}`, JSON.stringify(newWaypoint));
   } catch (e) {
     console.error(`[Waypoints] \u500B\u5225\u30D7\u30ED\u30D1\u30C6\u30A3\u4FDD\u5B58\u30A8\u30E9\u30FC [${id}]:`, e);
   }
@@ -1865,7 +2405,7 @@ function deleteWaypoint(dimension, location) {
   updateCache();
   if (existed) {
     try {
-      world6.setDynamicProperty(`${WP_PREFIX}${id}`, void 0);
+      world7.setDynamicProperty(`${WP_PREFIX}${id}`, void 0);
     } catch (e) {
       console.error(`[Waypoints] \u500B\u5225\u30D7\u30ED\u30D1\u30C6\u30A3\u524A\u9664\u30A8\u30E9\u30FC [${id}]:`, e);
     }
@@ -1980,19 +2520,19 @@ function getWaypointDisplayName(wp) {
 
 // src/waypoint/virtual-nav.ts
 import {
-  world as world8,
+  world as world9,
   Player as Player9,
-  system as system6,
-  EquipmentSlot as EquipmentSlot6
+  system as system7,
+  EquipmentSlot as EquipmentSlot7
 } from "@minecraft/server";
 
 // src/waypoint/waypoint-marker.ts
-import { world as world7 } from "@minecraft/server";
+import { world as world8 } from "@minecraft/server";
 var WAYPOINT_MARKER_TYPE = "mining_utility:waypoint_marker";
 var WAYPOINT_MARKER_TAG = "waypoint_marker";
 function getLoweredWaypointKeys() {
   const loweredKeys = /* @__PURE__ */ new Set();
-  for (const player of world7.getAllPlayers()) {
+  for (const player of world8.getAllPlayers()) {
     if (!player || !player.isValid) continue;
     const pLoc = player.location;
     const px = Math.floor(pLoc.x);
@@ -2013,7 +2553,7 @@ function resolveDimension(dim) {
   try {
     if (typeof dim !== "string") return dim;
     const formatted = dim.includes(":") ? dim : `minecraft:${dim}`;
-    return world7.getDimension(formatted);
+    return world8.getDimension(formatted);
   } catch {
     return null;
   }
@@ -2252,7 +2792,7 @@ function getPlayerVirtualNav(player) {
 function getOrCreatePlayerVirtualNav(player) {
   let state = playerVirtualNavMap.get(player.id);
   if (!state) {
-    const currentTick = system6.currentTick;
+    const currentTick = system7.currentTick;
     state = {
       targetOffset: { x: 0, y: 0, z: 0 },
       startOffset: { x: 0, y: 0, z: 0 },
@@ -2305,7 +2845,7 @@ function isPlayerHoldingCompass(player) {
   try {
     const equippable = player.getComponent("minecraft:equippable");
     if (!equippable) return false;
-    const mainhand = equippable.getEquipment(EquipmentSlot6.Mainhand);
+    const mainhand = equippable.getEquipment(EquipmentSlot7.Mainhand);
     return mainhand?.typeId === "minecraft:compass" || mainhand?.typeId === "minecraft:recovery_compass";
   } catch {
     return false;
@@ -2315,7 +2855,7 @@ function isPlayerHoldingRecoveryCompass(player) {
   try {
     const equippable = player.getComponent("minecraft:equippable");
     if (!equippable) return false;
-    const mainhand = equippable.getEquipment(EquipmentSlot6.Mainhand);
+    const mainhand = equippable.getEquipment(EquipmentSlot7.Mainhand);
     return mainhand?.typeId === "minecraft:recovery_compass";
   } catch {
     return false;
@@ -2336,11 +2876,11 @@ function hasRecoveryCompassInInventory(player) {
     }
     const equippable = player.getComponent("minecraft:equippable");
     if (equippable) {
-      const offhand = equippable.getEquipment(EquipmentSlot6.Offhand);
+      const offhand = equippable.getEquipment(EquipmentSlot7.Offhand);
       if (offhand?.typeId === "minecraft:recovery_compass") {
         return true;
       }
-      const mainhand = equippable.getEquipment(EquipmentSlot6.Mainhand);
+      const mainhand = equippable.getEquipment(EquipmentSlot7.Mainhand);
       if (mainhand?.typeId === "minecraft:recovery_compass") {
         return true;
       }
@@ -2380,7 +2920,7 @@ function getFocusedWaypoint(player) {
 function getCurrentVirtualOffset(player) {
   const state = playerVirtualNavMap.get(player.id);
   if (!state) return { x: 0, y: 0, z: 0 };
-  const currentTick = system6.currentTick;
+  const currentTick = system7.currentTick;
   const elapsed = currentTick - state.animStartTick;
   if (elapsed >= state.animDurationTicks) {
     return { ...state.targetOffset };
@@ -2585,7 +3125,7 @@ function formatWaypointHUDText(player, waypoint, actionTag = "", isZoomed) {
 }
 function showWaypointOperationNotice(player, waypoint, actionTag, durationTicks = 15) {
   const state = getOrCreatePlayerVirtualNav(player);
-  const currentTick = system6.currentTick;
+  const currentTick = system7.currentTick;
   const text = formatWaypointHUDText(player, waypoint, actionTag);
   state.noticeText = text;
   state.noticeUntilTick = currentTick + durationTicks;
@@ -2638,7 +3178,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
   if (!itemStack || itemStack.typeId !== "minecraft:compass" && itemStack.typeId !== "minecraft:recovery_compass") {
     return;
   }
-  const currentTick = system6.currentTick;
+  const currentTick = system7.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
   if (currentTick - state.lastUseTick < 5) {
     cancelCallback?.();
@@ -2668,7 +3208,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
       setWaypointHiddenForPlayer(player, key, false);
       state.pinnedWaypointKey = key;
       showWaypointOperationNotice(player, targetWp, "\xA76[\u56FA\u5B9A]");
-      system6.run(() => {
+      system7.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
@@ -2679,7 +3219,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
     } else if (state.pinnedWaypointKey === key) {
       state.pinnedWaypointKey = null;
       showWaypointOperationNotice(player, targetWp, "\xA77[\u56FA\u5B9A\u89E3\u9664]");
-      system6.run(() => {
+      system7.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.break", { pitch: 1, volume: 0.8 });
@@ -2690,7 +3230,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
     } else {
       state.pinnedWaypointKey = key;
       showWaypointOperationNotice(player, targetWp, "\xA76[\u56FA\u5B9A]");
-      system6.run(() => {
+      system7.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
@@ -2722,7 +3262,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
           closestHit.waypoint,
           "\xA77[\u56FA\u5B9A\u89E3\u9664]"
         );
-        system6.run(() => {
+        system7.run(() => {
           try {
             if (player && player.isValid) {
               player.playSound("random.break", { pitch: 1, volume: 0.8 });
@@ -2733,7 +3273,7 @@ function handleCompassVirtualNav(player, itemStack, cancelCallback) {
       } else {
         state.pinnedWaypointKey = key;
         showWaypointOperationNotice(player, closestHit.waypoint, "\xA76[\u56FA\u5B9A]");
-        system6.run(() => {
+        system7.run(() => {
           try {
             if (player && player.isValid) {
               player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
@@ -2812,7 +3352,7 @@ function handleCompassLeftClick(player, itemStack) {
     if (!isRecoveryCompass) {
       return;
     }
-    const currentTick2 = system6.currentTick;
+    const currentTick2 = system7.currentTick;
     const state2 = getOrCreatePlayerVirtualNav(player);
     if (currentTick2 - state2.lastLeftClickTick < 5) {
       return;
@@ -2828,7 +3368,7 @@ function handleCompassLeftClick(player, itemStack) {
       player.onScreenDisplay.setActionBar(modeText);
     } catch {
     }
-    system6.run(() => {
+    system7.run(() => {
       try {
         if (player && player.isValid) {
           if (isDeathOnly) {
@@ -2842,7 +3382,7 @@ function handleCompassLeftClick(player, itemStack) {
     });
     return;
   }
-  const currentTick = system6.currentTick;
+  const currentTick = system7.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
   if (currentTick - state.lastLeftClickTick < 2) {
     return;
@@ -2870,7 +3410,7 @@ function handleCompassLeftClick(player, itemStack) {
       }
       if (isNowHidden) {
         showWaypointOperationNotice(player, closeTargetWp, "\xA77[\u975E\u8868\u793A]");
-        system6.run(() => {
+        system7.run(() => {
           try {
             if (player && player.isValid) {
               player.playSound("random.break", { pitch: 1, volume: 0.8 });
@@ -2880,7 +3420,7 @@ function handleCompassLeftClick(player, itemStack) {
         });
       } else {
         showWaypointOperationNotice(player, closeTargetWp, "\xA7a[\u8868\u793A]");
-        system6.run(() => {
+        system7.run(() => {
           try {
             if (player && player.isValid) {
               player.playSound("random.orb", { pitch: 1.4, volume: 0.9 });
@@ -2920,7 +3460,7 @@ function handleCompassLeftClick(player, itemStack) {
         player.sendMessage(`\xA7c[Waypoint] ${displayName} \u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
       } catch {
       }
-      system6.run(() => {
+      system7.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.break", { pitch: 1.2, volume: 1 });
@@ -2934,7 +3474,7 @@ function handleCompassLeftClick(player, itemStack) {
         state.pinnedWaypointKey = null;
       }
       showWaypointOperationNotice(player, targetWp, "\xA7c[\u975E\u8868\u793A \u25A0\u25A0]");
-      system6.run(() => {
+      system7.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.break", { pitch: 1, volume: 0.8 });
@@ -2948,7 +3488,7 @@ function handleCompassLeftClick(player, itemStack) {
     state.remoteHideClickTick = currentTick;
     const noticeTag = targetWp.source === "death" ? "\xA7c[\u524A\u9664 \u25A0\u25A1]" : "\xA7c[\u975E\u8868\u793A \u25A0\u25A1]";
     showWaypointOperationNotice(player, targetWp, noticeTag);
-    system6.run(() => {
+    system7.run(() => {
       try {
         if (player && player.isValid) {
           player.playSound("random.orb", { pitch: 1.2, volume: 0.8 });
@@ -2960,7 +3500,7 @@ function handleCompassLeftClick(player, itemStack) {
 }
 function updatePlayerVirtualNavHUD(player) {
   checkAndAutoDeleteDeathWaypoint(player);
-  const currentTick = system6.currentTick;
+  const currentTick = system7.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
   const isHolding = isPlayerHoldingCompass(player);
   if (state.wasHoldingCompass && !isHolding) {
@@ -3082,7 +3622,7 @@ function hasSilkTouchEnchantment(itemStack) {
 function handleSilkTouchWaypointDelete(player, itemStack, cancelCallback) {
   if (!(player instanceof Player9) || !player.isValid) return false;
   if (!hasSilkTouchEnchantment(itemStack)) return false;
-  const currentTick = system6.currentTick;
+  const currentTick = system7.currentTick;
   const state = getOrCreatePlayerVirtualNav(player);
   if (currentTick - state.lastSilkTouchDeleteTick < 10) {
     cancelCallback?.();
@@ -3112,13 +3652,13 @@ function handleSilkTouchWaypointDelete(player, itemStack, cancelCallback) {
       `\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`
     );
     if (targetWp.source !== "death") {
-      world8.sendMessage(
+      world9.sendMessage(
         `\xA7c[Waypoint] \xA7f${deletedDisplayName} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`
       );
     }
   } catch {
   }
-  system6.run(() => {
+  system7.run(() => {
     try {
       if (player && player.isValid) {
         player.playSound("random.break", { pitch: 1.2, volume: 1 });
@@ -3135,7 +3675,7 @@ function spawnWaypointParticle(options) {
   const { dimension, location, color, size, durationTicks } = options;
   if (!location) return;
   try {
-    const dim = typeof dimension === "string" ? world9.getDimension(
+    const dim = typeof dimension === "string" ? world10.getDimension(
       dimension.includes(":") ? dimension : `minecraft:${dimension}`
     ) : dimension;
     if (!dim) return;
@@ -3295,24 +3835,24 @@ var lastPlacedBannerName = /* @__PURE__ */ new Map();
 var playerBannerColorCache = /* @__PURE__ */ new Map();
 function initWaypoints() {
   loadWaypoints();
-  system7.runTimeout(() => {
+  system8.runTimeout(() => {
     try {
       syncWaypointMarkers();
     } catch {
     }
   }, 40);
-  system7.runInterval(() => {
+  system8.runInterval(() => {
     try {
       syncWaypointMarkers();
     } catch {
     }
   }, 100);
-  system7.runInterval(() => {
-    for (let player of world10.getAllPlayers()) {
+  system8.runInterval(() => {
+    for (let player of world11.getAllPlayers()) {
       if (!player || !player.isValid) continue;
       const equippable = player.getComponent("minecraft:equippable");
       if (!equippable) continue;
-      const mainhandItem = equippable.getEquipment(EquipmentSlot7.Mainhand);
+      const mainhandItem = equippable.getEquipment(EquipmentSlot8.Mainhand);
       if (!mainhandItem || mainhandItem.typeId !== "minecraft:banner") continue;
       for (let [data, colorName] of Object.entries(BANNER_COLOR_NAMES)) {
         const res = player.runCommand(
@@ -3325,7 +3865,7 @@ function initWaypoints() {
       }
     }
   }, 4);
-  world10.beforeEvents.itemUse.subscribe((event) => {
+  world11.beforeEvents.itemUse.subscribe((event) => {
     const { source: player, itemStack } = event;
     if (!itemStack) return;
     if (itemStack.typeId === "minecraft:compass" || itemStack.typeId === "minecraft:recovery_compass") {
@@ -3347,7 +3887,7 @@ function initWaypoints() {
       }
     }
   });
-  world10.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+  world11.beforeEvents.playerInteractWithBlock.subscribe((event) => {
     const { player, itemStack } = event;
     if (!itemStack) return;
     if (itemStack.typeId === "minecraft:compass" || itemStack.typeId === "minecraft:recovery_compass") {
@@ -3370,7 +3910,7 @@ function initWaypoints() {
     }
   });
   try {
-    const afterEvents = world10.afterEvents;
+    const afterEvents = world11.afterEvents;
     if (afterEvents && typeof afterEvents.playerSwingStart?.subscribe === "function") {
       afterEvents.playerSwingStart.subscribe((event) => {
         try {
@@ -3395,7 +3935,7 @@ function initWaypoints() {
     );
   }
   try {
-    const afterEvents = world10.afterEvents;
+    const afterEvents = world11.afterEvents;
     if (afterEvents && typeof afterEvents.playerStartBreakingBlock?.subscribe === "function") {
       afterEvents.playerStartBreakingBlock.subscribe((event) => {
         try {
@@ -3410,7 +3950,7 @@ function initWaypoints() {
     }
   } catch {
   }
-  world10.afterEvents.playerPlaceBlock.subscribe((event) => {
+  world11.afterEvents.playerPlaceBlock.subscribe((event) => {
     const { block, player } = event;
     if (block.typeId === "minecraft:standing_banner" || block.typeId === "minecraft:wall_banner") {
       const blockPos = Vector3Utils.floor(block.location);
@@ -3438,14 +3978,14 @@ function initWaypoints() {
       spawnWaypointMarker(player.dimension, waypoint);
       const displayName = getWaypointDisplayName(waypoint);
       try {
-        world10.sendMessage(
+        world11.sendMessage(
           `\xA7a[Waypoint] \xA7f${player.name} \xA7a\u304C\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8 \xA7f${displayName} \xA7a\u3092\u8A2D\u7F6E\u3057\u307E\u3057\u305F`
         );
       } catch {
       }
       const dim = player.dimension;
       const soundPos = { ...waypointPos };
-      system7.run(() => {
+      system8.run(() => {
         try {
           if (player && player.isValid) {
             player.playSound("random.orb", { pitch: 1.2, volume: 1 });
@@ -3462,14 +4002,14 @@ function initWaypoints() {
       }
     }
   });
-  world10.afterEvents.playerBreakBlock.subscribe((event) => {
+  world11.afterEvents.playerBreakBlock.subscribe((event) => {
     const { block, brokenBlockPermutation, player, itemStackBeforeBreak } = event;
     const blockTypeId = brokenBlockPermutation.type.id;
     if (blockTypeId === "minecraft:standing_banner" || blockTypeId === "minecraft:wall_banner") {
       const blockPos = Vector3Utils.floor(block.location);
       const waypoint = getWaypointAt(player.dimension, blockPos);
       if (waypoint) {
-        const usedItem = itemStackBeforeBreak ?? player.getComponent("minecraft:equippable")?.getEquipment(EquipmentSlot7.Mainhand);
+        const usedItem = itemStackBeforeBreak ?? player.getComponent("minecraft:equippable")?.getEquipment(EquipmentSlot8.Mainhand);
         if (hasSilkTouchEnchantment(usedItem)) {
           return;
         }
@@ -3480,7 +4020,7 @@ function initWaypoints() {
         try {
           player.sendMessage(`\xA7c[Waypoint] \xA7f${displayName} \xA7c\u3092\u524A\u9664\u3057\u307E\u3057\u305F`);
           player.playSound("random.break", { pitch: 1.2, volume: 1 });
-          world10.sendMessage(
+          world11.sendMessage(
             `\xA7c[Waypoint] \xA7f${displayName} \xA7c\u304C ${player.name} \u306B\u3088\u3063\u3066\u524A\u9664\u3055\u308C\u307E\u3057\u305F`
           );
         } catch {
@@ -3488,7 +4028,7 @@ function initWaypoints() {
       }
     }
   });
-  world10.afterEvents.playerLeave.subscribe((event) => {
+  world11.afterEvents.playerLeave.subscribe((event) => {
     try {
       lastPlacedBannerName.delete(event.playerId);
       playerBannerColorCache.delete(event.playerId);
@@ -3497,7 +4037,7 @@ function initWaypoints() {
     }
   });
   try {
-    world10.afterEvents.playerDimensionChange.subscribe((event) => {
+    world11.afterEvents.playerDimensionChange.subscribe((event) => {
       try {
         if (event.player && event.player.isValid) {
           handlePlayerDimensionChangeForWaypoints(event.player);
@@ -3512,15 +4052,15 @@ function initWaypoints() {
       e
     );
   }
-  system7.runInterval(() => {
+  system8.runInterval(() => {
     try {
       correctWaypointMarkerPositions();
     } catch {
     }
   }, 2);
-  system7.runInterval(() => {
+  system8.runInterval(() => {
     try {
-      const players = world10.getAllPlayers();
+      const players = world11.getAllPlayers();
       if (players.length === 0 || waypointCache.length === 0) return;
       for (let player of players) {
         if (!player || !player.isValid) continue;
@@ -3561,7 +4101,7 @@ function initWaypoints() {
     } catch {
     }
   }, 10);
-  world10.afterEvents.entityDie.subscribe((event) => {
+  world11.afterEvents.entityDie.subscribe((event) => {
     try {
       const deadEntity = event.deadEntity;
       if (!(deadEntity instanceof Player11)) return;
@@ -3598,7 +4138,7 @@ function initWaypoints() {
           const oldWp = existingDeathWps[i];
           try {
             const oldDimId = oldWp.dim.includes(":") ? oldWp.dim : `minecraft:${oldWp.dim}`;
-            const oldDim = world10.getDimension(oldDimId);
+            const oldDim = world11.getDimension(oldDimId);
             if (oldDim) {
               deleteWaypoint(oldDim, oldWp.pos);
               const oldKey = getWaypointKey(oldWp);
@@ -3632,8 +4172,8 @@ function initWaypoints() {
       );
     }
   });
-  system7.runInterval(() => {
-    for (let player of world10.getAllPlayers()) {
+  system8.runInterval(() => {
+    for (let player of world11.getAllPlayers()) {
       try {
         if (!player || !player.isValid) continue;
         updatePlayerVirtualNavHUD(player);
@@ -3645,10 +4185,10 @@ function initWaypoints() {
 }
 
 // src/map.ts
-import { world as world11, EquipmentSlot as EquipmentSlot8 } from "@minecraft/server";
+import { world as world12, EquipmentSlot as EquipmentSlot9 } from "@minecraft/server";
 var TARGET_MAP_LEVEL = 3;
 var MAP_SIZE = 128 * Math.pow(2, TARGET_MAP_LEVEL);
-world11.afterEvents.itemUse.subscribe((event) => {
+world12.afterEvents.itemUse.subscribe((event) => {
   const player = event.source;
   const item = event.itemStack;
   if (player.isSneaking && item.typeId === "minecraft:filled_map") {
@@ -3658,22 +4198,22 @@ world11.afterEvents.itemUse.subscribe((event) => {
     const mz = Math.floor((z + 64) / MAP_SIZE);
     const equippable = player.getComponent("minecraft:equippable");
     if (!equippable) return;
-    const mainhandItem = equippable.getEquipment(EquipmentSlot8.Mainhand);
+    const mainhandItem = equippable.getEquipment(EquipmentSlot9.Mainhand);
     if (mainhandItem && mainhandItem.typeId === "minecraft:filled_map") {
       let baseName = mainhandItem.nameTag ?? "\u5730\u56F3";
       baseName = baseName.replace(/\s*\([+-]?\d+,\s*[+-]?\d+\)$/, "");
       const newName = `${baseName} (${mx}, ${mz})`;
       mainhandItem.nameTag = newName;
-      equippable.setEquipment(EquipmentSlot8.Mainhand, mainhandItem);
+      equippable.setEquipment(EquipmentSlot9.Mainhand, mainhandItem);
       player.sendMessage(`\xA7a[\u5730\u56F3] \u540D\u524D\u3092\u5909\u66F4\u3057\u307E\u3057\u305F: \xA7f${newName}`);
     }
   }
 });
 
 // src/index.ts
-system8.run(() => {
+system9.run(() => {
   try {
-    world12.gameRules.keepInventory = true;
+    world13.gameRules.keepInventory = true;
   } catch {
   }
   initWaypoints();
@@ -3681,37 +4221,40 @@ system8.run(() => {
     "\xA7a[Mining & Utility Addon] \u63A1\u6398\u30FB\u5893\u30FB\u305F\u3044\u307E\u3064\u30FB\u30A6\u30A7\u30A4\u30DD\u30A4\u30F3\u30C8\u6A5F\u80FD\u304C\u6B63\u5E38\u306B\u30ED\u30FC\u30C9\u3055\u308C\u307E\u3057\u305F\u3002"
   );
 });
-world12.beforeEvents.playerBreakBlock.subscribe((event) => {
+world13.beforeEvents.playerBreakBlock.subscribe((event) => {
   handleGraveBeforeBreak(event);
 });
-world12.afterEvents.playerBreakBlock.subscribe((event) => {
+world13.afterEvents.playerBreakBlock.subscribe((event) => {
   oreMassDestruction(event, ORE_BLOCK_IDS);
   treeMassDestruction(event);
 });
-world12.beforeEvents.itemUse.subscribe((event) => {
+world13.beforeEvents.itemUse.subscribe((event) => {
   handleSettingsItemUse(event, () => {
     event.cancel = true;
   });
 });
-world12.afterEvents.entityDie.subscribe((event) => {
+world13.afterEvents.entityDie.subscribe((event) => {
   handleGraveEntityDie(event);
 });
-world12.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+world13.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
+  if (!event.cancel) {
+    handleTorchPlaceOnInteract(event);
+  }
 });
-system8.afterEvents.scriptEventReceive.subscribe((event) => {
+system9.afterEvents.scriptEventReceive.subscribe((event) => {
   try {
     handleSettingsScriptEvent(event);
   } catch (error) {
     console.error("\u30A4\u30D9\u30F3\u30C8\u51E6\u7406\u30A8\u30E9\u30FC:", error);
   }
 });
-world12.afterEvents.playerSpawn.subscribe((event) => {
+world13.afterEvents.playerSpawn.subscribe((event) => {
   const player = event.player;
   if (!player) return;
   handleGravePlayerSpawn(player);
   if (event.initialSpawn) {
-    system8.run(() => {
+    system9.run(() => {
       try {
         player.sendMessage(
           `\xA76[Mining & Utility Addon] \xA7a\u30ED\u30FC\u30C9\u5B8C\u4E86

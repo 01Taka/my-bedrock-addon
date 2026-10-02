@@ -17,3 +17,6 @@ export interface ActiveLightData {
 
 // たいまつ持ち替えのクールダウンtick数（約0.35秒）
 export const SWAP_COOLDOWN_TICKS = 7;
+
+// プレイヤーのライト配置座標を永続化するためのDynamicPropertyキー
+export const TORCH_SAVED_LIGHTS_PROP = "torch_saved_lights";

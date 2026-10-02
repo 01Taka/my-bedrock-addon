@@ -7,7 +7,11 @@ import {
   EquipmentSlot,
 } from "@minecraft/server";
 import { Vector3Utils } from "@minecraft/math";
-import { TORCH_LIGHT_LEVELS, ActiveLightData } from "./constants";
+import {
+  TORCH_LIGHT_LEVELS,
+  ActiveLightData,
+  TORCH_SAVED_LIGHTS_PROP,
+} from "./constants";
 
 // プレイヤーごとに「直前に置いたライトブロックの情報」を記録するマップ
 export const activeLights = new Map<string, ActiveLightData>();
@@ -86,11 +90,7 @@ export function placeLight(
     const block = dimension.getBlock(position);
     if (!block || !isAirOrLightBlock(block.typeId)) return false;
 
-    // もし既にライトブロックが存在し、アドオン配置でない場合はワールド既存のライトなので上書きしない
     const key = getLightPosKey(dimension.id, position);
-    if (isLightBlock(block.typeId) && !addonPlacedLights.has(key)) {
-      return false;
-    }
 
     const lightPermutation = BlockPermutation.resolve("minecraft:light_block", {
       block_light_level: level,
@@ -104,7 +104,7 @@ export function placeLight(
 }
 
 /**
- * 単一のライトブロックを安全に消去する（アドオン配置かつ他プレイヤーが使っていない場合のみ）
+ * 単一のライトブロックを安全に消去する（他プレイヤーが使っていない場合のみ）
  */
 export function removeLight(
   dimension: Dimension,
@@ -112,10 +112,6 @@ export function removeLight(
   playerId?: string,
 ) {
   const key = getLightPosKey(dimension.id, position);
-  // アドオンが配置したものでなければ、ワールド既存のライトブロックなので絶対に消去しない
-  if (!addonPlacedLights.has(key)) {
-    return;
-  }
 
   // 他プレイヤーがこの座標を光源として利用中の場合は消去しない
   if (playerId && isLightNeededByOtherPlayers(playerId, dimension.id, position)) {
@@ -136,7 +132,7 @@ export function removeLight(
 /**
  * プレイヤーの全ライトブロックを安全に消去する
  */
-export function clearPreviousLight(playerId: string) {
+export function clearPreviousLight(playerId: string, player?: Player) {
   const previous = activeLights.get(playerId);
   if (!previous) return;
 
@@ -150,4 +146,106 @@ export function clearPreviousLight(playerId: string) {
   }
 
   activeLights.delete(playerId);
+  if (player) {
+    saveActiveLights(player, undefined);
+  }
+}
+
+/**
+ * ワールド内のすべてのアドオン配置ライトブロックを一括強制消去する
+ * （シングルプレイ退出時や全プレイヤー切断時の確実なクリーンアップ）
+ */
+export function clearAllLights(): void {
+  for (const [playerId, lightData] of activeLights.entries()) {
+    try {
+      const dimension = world.getDimension(lightData.dimensionId);
+      for (const pos of lightData.locations) {
+        removeLight(dimension, pos, playerId);
+      }
+    } catch {}
+  }
+  activeLights.clear();
+
+  // addonPlacedLights に残っているすべてのライトブロック座標を空気へ戻す
+  for (const key of addonPlacedLights) {
+    try {
+      const [dimensionId, coords] = key.split("@");
+      const [x, y, z] = coords.split(",").map(Number);
+      const dimension = world.getDimension(dimensionId);
+      const block = dimension.getBlock({ x, y, z });
+      if (block && isLightBlock(block.typeId)) {
+        block.setType("minecraft:air");
+      }
+    } catch {}
+  }
+  addonPlacedLights.clear();
+}
+
+/**
+ * プレイヤーのライト配置情報を DynamicProperty に保存
+ */
+export function saveActiveLights(
+  player: Player,
+  data: ActiveLightData | undefined,
+): void {
+  try {
+    if (data && data.locations.length > 0) {
+      player.setDynamicProperty(TORCH_SAVED_LIGHTS_PROP, JSON.stringify(data));
+    } else {
+      player.setDynamicProperty(TORCH_SAVED_LIGHTS_PROP, undefined);
+    }
+  } catch (e) {
+    // 例外対策
+  }
+}
+
+/**
+ * プレイヤーがワールドに入った時、前回セッションで残ってしまったライトブロックを安全に消去する
+ */
+export function restoreAndClearSavedLights(player: Player): void {
+  try {
+    // 1. DynamicProperties に保存されていた前回セッションのライトブロックを消去
+    const raw = player.getDynamicProperty(TORCH_SAVED_LIGHTS_PROP);
+    if (typeof raw === "string") {
+      try {
+        const savedData = JSON.parse(raw) as ActiveLightData;
+        if (
+          savedData &&
+          savedData.dimensionId &&
+          Array.isArray(savedData.locations)
+        ) {
+          const dimension = world.getDimension(savedData.dimensionId);
+          for (const pos of savedData.locations) {
+            try {
+              const block = dimension.getBlock(pos);
+              if (block && isLightBlock(block.typeId)) {
+                block.setType("minecraft:air");
+              }
+              const key = getLightPosKey(savedData.dimensionId, pos);
+              addonPlacedLights.delete(key);
+            } catch {}
+          }
+        }
+      } catch {}
+      player.setDynamicProperty(TORCH_SAVED_LIGHTS_PROP, undefined);
+    }
+
+    // 2. プレイヤーのログイン位置（足元・頭）にあるライトブロックもクリーンアップ
+    const footPos = Vector3Utils.floor(player.location);
+    const headPos = { x: footPos.x, y: footPos.y + 1, z: footPos.z };
+    const dimension = player.dimension;
+
+    for (const pos of [footPos, headPos]) {
+      try {
+        const block = dimension.getBlock(pos);
+        if (block && isLightBlock(block.typeId)) {
+          block.setType("minecraft:air");
+          const key = getLightPosKey(dimension.id, pos);
+          addonPlacedLights.delete(key);
+        }
+      } catch {}
+    }
+  } catch (e) {
+    // 例外対策
+  }
 }

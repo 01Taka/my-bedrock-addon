@@ -6,7 +6,7 @@ import { TORCH_LIGHT_LEVELS, SWAP_COOLDOWN_TICKS } from "./constants";
 const lastTorchSwapTick = new Map<string, number>();
 
 /**
- * スニーク腕振り（左クリック）によるメインハンドからオフハンドへのたいまつ持ち替え
+ * スニーク腕振り（左クリック）によるメインハンドからオフハンドへのたいまつ移動・スタック補充
  */
 export function handleTorchSwap(player: Player, cancelCallback?: () => void) {
   if (!isSettingEnabled(player, SETTING_KEYS.TORCH)) return;
@@ -24,22 +24,52 @@ export function handleTorchSwap(player: Player, cancelCallback?: () => void) {
   const mainhandItem = equippable.getEquipment(EquipmentSlot.Mainhand);
   const offhandItem = equippable.getEquipment(EquipmentSlot.Offhand);
 
-  // メインハンド ➔ オフハンド（オフハンドから外す操作はインベントリから手動で行う）
-  if (
-    mainhandItem &&
-    mainhandItem.typeId in TORCH_LIGHT_LEVELS &&
-    !offhandItem
-  ) {
-    lastTorchSwapTick.set(player.id, currentTick);
-    cancelCallback?.();
-    system.run(() => {
-      player.runCommand(
-        `replaceitem entity @s slot.weapon.offhand 0 ${mainhandItem.typeId} ${mainhandItem.amount}`,
-      );
-      equippable.setEquipment(EquipmentSlot.Mainhand, undefined);
-    });
+  // メインハンドに対象のたいまつを持っていること
+  if (!mainhandItem || !(mainhandItem.typeId in TORCH_LIGHT_LEVELS)) {
     return;
   }
+
+  // オフハンドが空、またはオフハンドに同種のたいまつがあること
+  const isOffhandEmpty = !offhandItem;
+  const isSameTorch = offhandItem && offhandItem.typeId === mainhandItem.typeId;
+
+  if (!isOffhandEmpty && !isSameTorch) {
+    return;
+  }
+
+  const currentOffhandAmount = isOffhandEmpty ? 0 : offhandItem.amount;
+  // 既にオフハンドが最大スタック（64個）なら移動不要
+  if (currentOffhandAmount >= 64) {
+    return;
+  }
+
+  // 移動可能な個数を算出（最大64個まで）
+  const spaceInOffhand = 64 - currentOffhandAmount;
+  const transferAmount = Math.min(spaceInOffhand, mainhandItem.amount);
+  if (transferAmount <= 0) {
+    return;
+  }
+
+  const newOffhandAmount = currentOffhandAmount + transferAmount;
+  const remainingMainhandAmount = mainhandItem.amount - transferAmount;
+
+  lastTorchSwapTick.set(player.id, currentTick);
+  cancelCallback?.();
+
+  system.run(() => {
+    // オフハンドの個数を更新
+    player.runCommand(
+      `replaceitem entity @s slot.weapon.offhand 0 ${mainhandItem.typeId} ${newOffhandAmount}`,
+    );
+
+    // メインハンドの残数を更新
+    if (remainingMainhandAmount > 0) {
+      mainhandItem.amount = remainingMainhandAmount;
+      equippable.setEquipment(EquipmentSlot.Mainhand, mainhandItem);
+    } else {
+      equippable.setEquipment(EquipmentSlot.Mainhand, undefined);
+    }
+  });
 }
 
 // 腕を振る動作（左クリック）検知によるたいまつ持ち替え

@@ -4,7 +4,7 @@ import {
   oreMassDestruction,
   treeMassDestruction,
 } from "./mass-destruction";
-import "./offhand-touch";
+import { handleTorchPlaceOnInteract } from "./offhand-touch";
 import {
   handleGraveEntityDie,
   handleGraveBeforeInteract,
@@ -55,9 +55,12 @@ world.afterEvents.entityDie.subscribe((event) => {
   handleGraveEntityDie(event);
 });
 
-// ブロックの右クリックインタラクション (墓石回収 / ウェイポイント操作)
+// ブロックの右クリックインタラクション (墓石回収 / オフハンドたいまつ設置)
 world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
   handleGraveBeforeInteract(event);
+  if (!event.cancel) {
+    handleTorchPlaceOnInteract(event);
+  }
 });
 
 // スクリプトイベントコマンド (/scriptevent addon:... /scriptevent utility:...)
